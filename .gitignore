@@ -1,0 +1,25 @@
+# Secrets — never commit
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local Manager runtime artifacts
+local_manager.db
+local_manager.db-journal
+local_manager.db-wal
+local_manager.db-shm
+audit_logs/
+uploads/
+paused/
+*.log
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

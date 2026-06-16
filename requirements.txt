@@ -1,0 +1,10 @@
+# ZillaSoft Local Manager — Phase 1 (Core Infrastructure) dependencies.
+# Additional dependencies (anthropic SDK, plyer, etc.) are added per phase.
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-dotenv==1.0.1
+pydantic==2.10.4
+anthropic==0.109.2
+httpx==0.28.1
+python-multipart==0.0.20
+plyer==2.1.0

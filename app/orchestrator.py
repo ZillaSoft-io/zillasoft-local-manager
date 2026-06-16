@@ -1,0 +1,226 @@
+"""Orchestrator — the pipeline loop (spec §3, §7, §8.0).
+
+Per session: pre-flight -> dry-run handshake (Sonnet plan, Haiku validate) ->
+cycle loop (Opus implements via bash, Sonnet tests + reviews) -> on pass, await
+Mario's approval; after `max_cycles` failures, escalate to Mario.
+
+Kill and pause signals (from SessionController) are polled between steps. Cost
+is tracked per session via a fresh UsageTracker from the agent factory.
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Callable, Optional
+
+from .agents.dry_run import run_dry_run
+from .cost import record_session_cost
+from .execution import run_tests
+from .execution.executor import CommandStopped
+from .vcs import GitOps
+
+logger = logging.getLogger(__name__)
+
+
+class Orchestrator:
+    def __init__(self, config, db, audit, *, controller, executor, preflight,
+                 budget, notifier, agent_factory: Callable,
+                 run_existing_tests: bool = True):
+        self._config = config
+        self._db = db
+        self._audit = audit
+        self._controller = controller
+        self._executor = executor
+        self._preflight = preflight
+        self._budget = budget
+        self._notifier = notifier
+        self._agent_factory = agent_factory
+        self._run_existing_tests = run_existing_tests
+
+    # ------------------------------------------------------------------ #
+    def run_session(self, session_id: str) -> dict:
+        session = self._db.get_session(session_id)
+        if session is None:
+            raise KeyError(f"No session {session_id}")
+        project = session.get("project")
+        task_type = session.get("task_type")
+        ctx = (session.get("haiku_context") or {}).get("summary") or ""
+
+        haiku, sonnet, opus, tracker = self._agent_factory()
+        repo_path, test_command = self._target(session)
+
+        # ---- pre-flight ----
+        pf_repo = repo_path if task_type != "new_app" else None
+        pf = self._preflight.session(
+            repo_path=pf_repo, test_command=test_command, session_id=session_id,
+            run_existing_tests=self._run_existing_tests)
+        self._audit.update(session_id, project, {"preflight": pf.as_dict()})
+
+        # Capture the base SHA so a later reject can discard the session's
+        # local commits (reset --hard back to here).
+        if task_type != "new_app" and repo_path:
+            base_sha = GitOps(repo_path, self._executor).head_sha()
+            if base_sha:
+                self._db.update_session(
+                    session_id, deployment_status={"base_sha": base_sha})
+
+        self._db.update_session(session_id, status="in_progress")
+
+        # ---- dry-run handshake (Phase 2b) ----
+        max_cycles = int(self._config.get("LOCAL_MANAGER_MAX_CYCLES", 3) or 3)
+        dr = run_dry_run(sonnet, haiku, context=ctx, original_intent=ctx,
+                         max_rounds=max_cycles)
+        self._db.update_session(session_id, sonnet_instructions={
+            "plan": dr.plan, "instructions": dr.instructions,
+            "approved": dr.approved})
+        if not dr.approved:
+            return self._escalate(session_id, project, tracker,
+                                  "Dry-run plan not approved by Haiku.")
+        instructions = dr.instructions
+
+        # ---- cycle loop ----
+        for cycle in range(1, max_cycles + 1):
+            if self._controller.should_pause(session_id):
+                return self._on_pause(session_id, project, tracker, cycle,
+                                      instructions)
+            if self._controller.should_stop(session_id):
+                return self._on_stop(session_id, project, tracker, repo_path)
+
+            try:
+                opus_result = opus.implement_with_tools(
+                    instructions, repo_path=repo_path, executor=self._executor,
+                    session_id=session_id, controller=self._controller)
+            except CommandStopped:
+                opus_result = None
+
+            if opus_result is None or opus_result.stopped:
+                if self._controller.should_pause(session_id):
+                    return self._on_pause(session_id, project, tracker, cycle,
+                                          instructions)
+                return self._on_stop(session_id, project, tracker, repo_path)
+
+            opus_summary = sonnet.summarize_opus_output(
+                opus_result.text or "(no summary provided)")
+            # The final test run is short — not cancellable (the cancellable
+            # unit is Opus's bash loop, checked above and between its steps).
+            test_result = run_tests(self._executor, repo_path, test_command)
+            review = sonnet.review_after_tests(
+                opus_summary=opus_summary, test_summary=test_result.summary,
+                passed=test_result.ok)
+
+            self._audit.append_cycle(session_id, project, {
+                "cycle_num": cycle,
+                "opus": {"commands": opus_result.commands,
+                         "steps": opus_result.steps,
+                         "commit_sha": opus_result.last_commit_sha},
+                "sonnet": {"test_summary": test_result.summary,
+                           "test_passed": test_result.ok, "review": review},
+            })
+            self._db.update_session(
+                session_id, cycle_count=cycle,
+                opus_changes={"commands": opus_result.commands,
+                              "commit_sha": opus_result.last_commit_sha},
+                sonnet_review={"summary": opus_summary, "review": review,
+                               "test_summary": test_result.summary,
+                               "passed": test_result.ok})
+
+            if test_result.ok:
+                return self._finish(session_id, project, tracker, cycle)
+
+            # Failure -> new task for Opus (not a retry).
+            instructions = sonnet.bug_from_failure(
+                instructions=instructions, test_output=test_result.tail())
+
+        return self._escalate(
+            session_id, project, tracker,
+            f"Reached cycle limit ({max_cycles}) without passing tests.")
+
+    # ------------------------------------------------------------------ #
+    # Targets
+    # ------------------------------------------------------------------ #
+    def _target(self, session: dict) -> tuple[str, str]:
+        project = session.get("project")
+        if session.get("task_type") == "new_app" or not project:
+            scaffold = self._scaffold_dir(session)
+            stack = ((session.get("haiku_context") or {}).get(
+                "recommended_stack") or "").lower()
+            if any(t in stack for t in ("astro", "typescript", "node")):
+                return str(scaffold), "npm install && npm run build"
+            return str(scaffold), "pytest tests/ -v"
+        up = project.upper()
+        return (self._config.get_raw(f"PROJECT_{up}_REPO_PATH"),
+                self._config.get_raw(f"PROJECT_{up}_TEST_COMMAND", ""))
+
+    def _scaffold_dir(self, session: dict) -> Path:
+        base = self._config.get_raw("PROJECT_WEBSITE_REPO_PATH")
+        parent = Path(base).parent if base else self._config.root
+        return parent / ("new-app-" + session["id"][:8])
+
+    # ------------------------------------------------------------------ #
+    # Outcomes
+    # ------------------------------------------------------------------ #
+    def _record_cost(self, session_id: str, project: Optional[str], tracker):
+        report = record_session_cost(self._db, self._audit, session_id, project,
+                                     tracker, budget=None)
+        before = self._budget.spent
+        after = self._budget.record_spend(report.total)
+        for t in self._budget.thresholds_crossed(before, after):
+            self._notifier.desktop(
+                "Cost warning",
+                f"{int(t * 100)}% of the monthly cap reached "
+                f"(${after:.2f} / ${self._budget.cap:.2f}).")
+        return report
+
+    def _finish(self, session_id: str, project: Optional[str], tracker,
+                cycle: int) -> dict:
+        report = self._record_cost(session_id, project, tracker)
+        self._db.update_session(session_id, status="awaiting_approval")
+        self._notifier.notify(
+            "approval",
+            title="Approval needed",
+            message=f"Session {session_id[:8]} passed tests after {cycle} "
+                    f"cycle(s). Cost ${report.total:.2f}. Review to deploy.")
+        logger.info("Session %s awaiting approval (cost $%.2f).",
+                    session_id, report.total)
+        return {"status": "awaiting_approval", "cycles": cycle,
+                "cost": report.total}
+
+    def _escalate(self, session_id: str, project: Optional[str], tracker,
+                  reason: str) -> dict:
+        report = self._record_cost(session_id, project, tracker)
+        self._db.update_session(session_id, status="failed",
+                                error_message=reason)
+        self._audit.update(session_id, project, {"escalation": {"reason": reason}})
+        self._notifier.notify(
+            "escalation",
+            title="Escalation — needs you",
+            message=f"Session {session_id[:8]} escalated: {reason}",
+            email_subject="ZillaSoft Local Manager — escalation",
+            email_html=f"<p>{reason}</p>")
+        logger.info("Session %s escalated: %s", session_id, reason)
+        return {"status": "escalated", "reason": reason, "cost": report.total}
+
+    def _on_stop(self, session_id: str, project: Optional[str], tracker,
+                 repo_path: str) -> dict:
+        # Commit whatever is in the working tree before stopping (best-effort).
+        commit_sha = None
+        try:
+            self._executor.run(
+                'git add -A && git commit -m "WIP: stopped via kill switch" '
+                '|| true', cwd=repo_path)
+            sha = self._executor.run("git rev-parse HEAD", cwd=repo_path)
+            commit_sha = sha.stdout.strip() if sha.ok else None
+        except Exception:
+            pass
+        self._record_cost(session_id, project, tracker)
+        self._controller.kill(session_id, reason="kill switch",
+                              commit_sha=commit_sha)
+        return {"status": "stopped", "commit_sha": commit_sha}
+
+    def _on_pause(self, session_id: str, project: Optional[str], tracker,
+                  cycle: int, instructions: str) -> dict:
+        report = self._record_cost(session_id, project, tracker)
+        self._controller.save_pause(session_id, snapshot={
+            "cycle": cycle, "instructions": instructions,
+            "cost_so_far": report.total})
+        return {"status": "paused", "cycle": cycle}
