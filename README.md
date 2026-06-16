@@ -24,7 +24,7 @@ Built phase by phase per `LOCAL_MANAGER_ARCHITECTURE.md`.
 | 6 | Git operations (approve/push, reject, rollback) | ✅ done |
 | 7 | Auto-configuration (new apps) | ✅ done |
 | 8 | Deployment tracking (GHA/Railway/AWS/health) | ✅ done |
-| 9 | UI / web frontend | ⏳ |
+| 9 | UI / web frontend (buildless single-page) | ✅ done |
 | 10 | Testing & polish | ⏳ |
 
 ## Setup

@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>ZillaSoft Local Manager</title>
+<style>
+  :root{
+    --bg:#0a0a0f; --surface:#16161f; --surface2:#1d1d2a; --border:#2a2a3a;
+    --text:#f5f5f7; --muted:#86868b; --accent:#7c3aed; --accent2:#6d28d9;
+    --cyan:#22d3ee; --green:#34d399; --red:#f87171; --amber:#fbbf24;
+  }
+  *{box-sizing:border-box} body{margin:0;font:14px/1.5 Inter,system-ui,sans-serif;
+    background:var(--bg);color:var(--text)}
+  button{font:inherit;cursor:pointer;border:1px solid var(--border);
+    background:var(--surface2);color:var(--text);border-radius:8px;padding:7px 12px}
+  button:hover{border-color:var(--accent)}
+  button.primary{background:var(--accent);border-color:var(--accent)}
+  button.primary:hover{background:var(--accent2)}
+  button.danger{color:var(--red);border-color:#5a2a2a}
+  button.ok{color:var(--green);border-color:#235}
+  input,select,textarea{font:inherit;background:var(--bg);color:var(--text);
+    border:1px solid var(--border);border-radius:8px;padding:8px;width:100%}
+  header{display:flex;align-items:center;gap:16px;padding:12px 18px;
+    border-bottom:1px solid var(--border);background:var(--surface)}
+  header h1{font-size:15px;margin:0;letter-spacing:-.3px}
+  .grow{flex:1}
+  .ticker{font-size:12px;color:var(--muted)}
+  .ticker b{color:var(--cyan)}
+  .layout{display:flex;height:calc(100vh - 53px)}
+  .sidebar{width:300px;border-right:1px solid var(--border);overflow:auto;
+    background:var(--surface)}
+  .main{flex:1;overflow:auto;padding:20px}
+  .scard{padding:11px 14px;border-bottom:1px solid var(--border);cursor:pointer}
+  .scard:hover{background:var(--surface2)}
+  .scard.sel{background:var(--surface2);border-left:3px solid var(--accent)}
+  .scard .row{display:flex;justify-content:space-between;gap:8px}
+  .scard .desc{color:var(--muted);font-size:12px;margin-top:3px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pill{font-size:11px;padding:2px 8px;border-radius:20px;border:1px solid var(--border)}
+  .st-in_progress{color:var(--cyan)} .st-awaiting_approval{color:var(--amber)}
+  .st-deployed{color:var(--green)} .st-approved{color:var(--green)}
+  .st-failed{color:var(--red)} .st-stopped{color:var(--muted)}
+  .st-paused{color:var(--amber)} .st-rolled_back{color:var(--muted)}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:12px;
+    padding:16px;margin-bottom:16px}
+  .card h3{margin:0 0 12px;font-size:13px;text-transform:uppercase;
+    letter-spacing:.5px;color:var(--muted)}
+  .chat{display:flex;flex-direction:column;gap:8px;max-height:340px;overflow:auto}
+  .msg{padding:8px 12px;border-radius:10px;max-width:80%}
+  .msg.user{align-self:flex-end;background:var(--accent);}
+  .msg.assistant{align-self:flex-start;background:var(--surface2)}
+  .msg.system{align-self:center;background:transparent;color:var(--muted);font-size:12px}
+  .actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  pre{background:var(--bg);border:1px solid var(--border);border-radius:8px;
+    padding:12px;overflow:auto;font-size:12px;max-height:300px}
+  .field{display:flex;gap:8px;align-items:center;margin-bottom:8px}
+  .field label{width:230px;color:var(--muted);font-size:12px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;
+    align-items:center;justify-content:center;z-index:10}
+  .modal.show{display:flex}
+  .modal .box{background:var(--surface);border:1px solid var(--border);
+    border-radius:14px;padding:20px;width:640px;max-height:80vh;overflow:auto}
+  .gate{position:fixed;inset:0;background:var(--bg);display:flex;
+    align-items:center;justify-content:center;flex-direction:column;gap:12px;z-index:20}
+  .muted{color:var(--muted)} .mono{font-family:ui-monospace,monospace}
+  .warn{color:var(--amber)} .err{color:var(--red)}
+</style>
+</head>
+<body>
+<div id="gate" class="gate">
+  <h1>ZillaSoft Local Manager</h1>
+  <p class="muted">Paste your API token (printed in the server console on startup).</p>
+  <input id="gate-token" style="width:380px" placeholder="LOCAL_MANAGER_AUTH_TOKEN"/>
+  <button class="primary" onclick="saveToken()">Connect</button>
+  <p id="gate-err" class="err"></p>
+</div>
+
+<header style="display:none" id="app-header">
+  <h1>⚡ Local Manager</h1>
+  <span class="ticker" id="ticker"></span>
+  <span class="grow"></span>
+  <button onclick="openSettings()">⚙ Settings</button>
+  <button onclick="logout()">Sign out</button>
+</header>
+
+<div class="layout" id="app" style="display:none">
+  <div class="sidebar">
+    <div style="padding:12px"><button class="primary" style="width:100%"
+      onclick="newTask()">+ New Task</button></div>
+    <div id="sessions"></div>
+  </div>
+  <div class="main" id="main"></div>
+</div>
+
+<div class="modal" id="settings">
+  <div class="box">
+    <div style="display:flex"><h3 style="flex:1">Settings</h3>
+      <button onclick="closeSettings()">Close</button></div>
+    <p class="muted" style="font-size:12px">Credentials are masked. Setting any
+      value here is the only allowed way to edit credentials (agents cannot).</p>
+    <div id="settings-body"></div>
+  </div>
+</div>
+
+<script>
+const S = { token: localStorage.getItem('zlm_token') || '', sessions: [],
+            sel: null, cost: null };
+
+async function api(path, opts={}){
+  const r = await fetch(path, {...opts, headers:{
+    'Authorization':'Bearer '+S.token,
+    'Content-Type':'application/json', ...(opts.headers||{})}});
+  if(r.status===401){ logout(); throw new Error('unauthorized'); }
+  const t = await r.text();
+  const data = t ? JSON.parse(t) : {};
+  if(!r.ok) throw Object.assign(new Error(data.detail||r.statusText),{status:r.status});
+  return data;
+}
+function saveToken(){
+  const t = document.getElementById('gate-token').value.trim();
+  if(!t) return;
+  S.token = t; localStorage.setItem('zlm_token', t);
+  boot();
+}
+function logout(){ localStorage.removeItem('zlm_token'); S.token=''; location.reload(); }
+
+async function boot(){
+  try{ await api('/api/cost'); }
+  catch(e){ document.getElementById('gate-err').textContent =
+    'Connection failed: '+e.message; return; }
+  document.getElementById('gate').style.display='none';
+  document.getElementById('app-header').style.display='flex';
+  document.getElementById('app').style.display='flex';
+  refresh(); setInterval(refresh, 4000);
+  newTask();
+}
+
+async function refresh(){
+  try{
+    S.cost = await api('/api/cost');
+    S.sessions = await api('/api/sessions?limit=20');
+    renderTicker(); renderSidebar();
+    if(S.sel){ const cur = await api('/api/sessions/'+S.sel.id); S.sel = cur;
+      if(document.getElementById('detail')) renderDetail(); }
+  }catch(e){}
+}
+function renderTicker(){
+  const c = S.cost||{};
+  document.getElementById('ticker').innerHTML =
+    `Month: <b>$${(c.spent||0).toFixed(2)}</b> / $${(c.cap||0).toFixed(2)} `+
+    `(${Math.round((c.fraction||0)*100)}%)`;
+}
+function renderSidebar(){
+  const el = document.getElementById('sessions');
+  el.innerHTML = S.sessions.map(s=>`
+    <div class="scard ${S.sel&&S.sel.id===s.id?'sel':''}" onclick="select('${s.id}')">
+      <div class="row"><span>${s.task_type||''} · ${s.project||'new app'}</span>
+        <span class="pill st-${s.status}">${(s.status||'').replace(/_/g,' ')}</span></div>
+      <div class="desc">${(s.input_ref||s.id||'').slice(0,46)}</div>
+      <div class="desc">$${(s.total_cost||0).toFixed(2)}</div>
+    </div>`).join('') || '<p class="muted" style="padding:14px">No sessions yet.</p>';
+}
+async function select(id){ S.sel = await api('/api/sessions/'+id); renderDetail(); }
+
+// ---- new task / chatbox ----
+function newTask(){
+  S.sel=null; renderSidebar();
+  document.getElementById('main').innerHTML = `
+   <div class="card"><h3>New Task</h3>
+    <div class="field"><label>Type</label>
+      <select id="nt-type" onchange="ntProj()">
+        <option value="bug_fix">Bug fix</option><option value="feature">Feature</option>
+        <option value="new_app">New app</option></select></div>
+    <div class="field" id="nt-proj-row"><label>Project</label>
+      <select id="nt-proj"><option>website</option><option>snipzilla</option>
+        <option>stashzilla</option></select></div>
+    <div class="field" style="align-items:flex-start"><label>Describe it</label>
+      <textarea id="nt-msg" rows="3" placeholder="What do you want done?"></textarea></div>
+    <button class="primary" onclick="startTask()">Start →</button>
+   </div>`;
+}
+function ntProj(){ document.getElementById('nt-proj-row').style.display =
+  document.getElementById('nt-type').value==='new_app'?'none':'flex'; }
+async function startTask(){
+  const type=document.getElementById('nt-type').value;
+  const proj=type==='new_app'?null:document.getElementById('nt-proj').value;
+  const msg=document.getElementById('nt-msg').value.trim();
+  const res = await api('/api/input/sessions',{method:'POST',
+    body:JSON.stringify({task_type:type,project:proj,message:msg||undefined})});
+  await select(res.session_id); refresh();
+}
+async function send(){
+  const inp=document.getElementById('chat-input'); const m=inp.value.trim();
+  if(!m) return; inp.value='';
+  await api('/api/input/sessions/'+S.sel.id+'/messages',{method:'POST',
+    body:JSON.stringify({message:m})});
+  await renderChat();
+}
+async function renderChat(){
+  const msgs = (await api('/api/input/sessions/'+S.sel.id+'/messages')).messages;
+  document.getElementById('chat').innerHTML = msgs.map(m=>
+    `<div class="msg ${m.role}">${escapeHtml(m.content)}</div>`).join('');
+  const chat=document.getElementById('chat'); chat.scrollTop=chat.scrollHeight;
+  S.sel = await api('/api/sessions/'+S.sel.id);
+  const ctx = S.sel.haiku_context;
+  document.getElementById('chat-ready').innerHTML = (ctx&&ctx.summary)?
+    `<div class="card"><h3>Context ready</h3><p>${escapeHtml(ctx.summary)}</p>
+     <p class="muted">Scope: ${ctx.scope_level||'-'} · stack: ${ctx.recommended_stack||'-'}</p>
+     <button class="primary" onclick="runPipeline()">Run pipeline →</button></div>`:'';
+}
+async function runPipeline(){ await api('/api/sessions/'+S.sel.id+'/run',
+  {method:'POST'}); refresh(); }
+
+// ---- session detail ----
+async function renderDetail(){
+  const s = S.sel; if(!s){ return; }
+  let cost = {}; try{ cost = await api('/api/sessions/'+s.id+'/cost'); }catch(e){}
+  const cb = (cost.cost_breakdown||{});
+  const isInput = !(s.haiku_context && s.haiku_context.summary);
+  document.getElementById('main').innerHTML = `
+   <div id="detail">
+    <div class="card"><h3>Session ${s.id.slice(0,8)} ·
+      <span class="st-${s.status}">${(s.status||'').replace(/_/g,' ')}</span></h3>
+      <p class="muted">${s.task_type} · ${s.project||'new app'} · ${s.scope_level||''}</p>
+      ${s.error_message?`<p class="err">${escapeHtml(s.error_message)}</p>`:''}
+      <div class="actions">${actionButtons(s)}</div>
+    </div>
+    ${isInput?chatBlock():''}
+    ${cost.total_cost!=null?`<div class="card"><h3>Cost</h3>
+      <p>Total <b class="mono">$${(cost.total_cost||0).toFixed(4)}</b>
+      · tokens ${cost.total_tokens_used||0}</p>
+      <pre>${JSON.stringify(cb.by_phase||{},null,1)}</pre></div>`:''}
+    ${s.sonnet_review?`<div class="card"><h3>Review</h3>
+      <p>${escapeHtml((s.sonnet_review.review)||'')}</p>
+      <p class="muted">${escapeHtml(s.sonnet_review.test_summary||'')}</p></div>`:''}
+    ${s.setup_log?`<div class="card"><h3>Setup log</h3>
+      <pre>${escapeHtml(s.setup_log)}</pre></div>`:''}
+    <div class="card"><h3>Audit (raw)</h3>
+      <pre>${escapeHtml(JSON.stringify(s,null,1))}</pre></div>
+   </div>`;
+  if(isInput) renderChat();
+}
+function chatBlock(){ return `<div class="card"><h3>Clarification</h3>
+   <div class="chat" id="chat"></div><div id="chat-ready"></div>
+   <div class="field" style="margin-top:10px"><textarea id="chat-input" rows="2"
+     placeholder="Reply to Haiku..."></textarea>
+     <button class="primary" onclick="send()">Send</button></div></div>`; }
+function actionButtons(s){
+  const b=[]; const id=s.id;
+  if(s.status==='in_progress'){
+    b.push(btn('danger','Kill','doKill'),btn('','Pause','doPause')); }
+  if(s.status==='awaiting_approval'){
+    b.push(btn('ok','Approve','doApprove'),btn('danger','Reject','doReject')); }
+  if(s.status==='paused') b.push(btn('primary','Resume','doResume'));
+  if(s.status==='deployed'||s.status==='approved')
+    b.push(btn('danger','Rollback','doRollback'));
+  if(s.task_type==='new_app'&&s.status==='awaiting_approval')
+    b.push(btn('','Create GitHub repo','doCreateRepo'));
+  return b.join('');
+}
+function btn(cls,label,fn){ return `<button class="${cls}" onclick="${fn}()">${label}</button>`; }
+async function act(path,body){ try{ await api(path,{method:'POST',
+  body:JSON.stringify(body||{})}); await select(S.sel.id); refresh(); }
+  catch(e){ alert(e.message); } }
+const doKill=()=>act('/api/sessions/'+S.sel.id+'/kill',{reason:'manual'});
+const doPause=()=>act('/api/sessions/'+S.sel.id+'/pause',{});
+const doResume=()=>act('/api/sessions/'+S.sel.id+'/resume');
+const doApprove=()=>confirm('Approve and push to GitHub?')&&
+  act('/api/sessions/'+S.sel.id+'/approve',{});
+const doReject=()=>act('/api/sessions/'+S.sel.id+'/reject',{});
+const doRollback=()=>confirm('Revert the pushed commit?')&&
+  act('/api/sessions/'+S.sel.id+'/rollback');
+const doCreateRepo=()=>act('/api/sessions/'+S.sel.id+'/create-repo');
+
+// ---- settings ----
+async function openSettings(){
+  const cfg = await api('/api/config');
+  const keys = Object.keys(cfg).sort();
+  document.getElementById('settings-body').innerHTML = keys.map(k=>`
+    <div class="field"><label title="${k}">${k}</label>
+      <input id="cf_${k}" value="${cfg[k]==='<set>'||cfg[k]==='<unset>'?'':escapeAttr(cfg[k])}"
+        placeholder="${cfg[k]}"/>
+      <button onclick="saveCfg('${k}')">Save</button></div>`).join('');
+  document.getElementById('settings').classList.add('show');
+}
+async function saveCfg(k){
+  const v=document.getElementById('cf_'+k).value;
+  try{ await api('/api/config/set',{method:'POST',
+    body:JSON.stringify({key:k,value:v})});
+    document.getElementById('cf_'+k).placeholder='saved ✓'; }
+  catch(e){ alert(e.message); }
+}
+function closeSettings(){ document.getElementById('settings').classList.remove('show'); }
+
+function escapeHtml(s){ return (s||'').replace(/[&<>]/g,c=>(
+  {'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function escapeAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
+
+if(S.token) boot();
+</script>
+</body>
+</html>

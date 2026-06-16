@@ -142,6 +142,14 @@ async def health():
             "version": __version__}
 
 
+@app.get("/", include_in_schema=False)
+async def ui():
+    """Serve the single-page UI shell (auth happens client-side via token)."""
+    from fastapi.responses import FileResponse
+    from pathlib import Path
+    return FileResponse(Path(__file__).resolve().parent / "ui" / "index.html")
+
+
 # --------------------------------------------------------------------------- #
 # Authenticated API
 # --------------------------------------------------------------------------- #
@@ -190,6 +198,7 @@ from .routes.pipeline import router as pipeline_router  # noqa: E402
 from .routes.release import router as release_router  # noqa: E402
 from .routes.newapp import router as newapp_router  # noqa: E402
 from .routes.deploy import router as deploy_router  # noqa: E402
+from .routes.config import router as config_router  # noqa: E402
 
 app.include_router(input_router)
 app.include_router(control_router)
@@ -197,3 +206,4 @@ app.include_router(pipeline_router)
 app.include_router(release_router)
 app.include_router(newapp_router)
 app.include_router(deploy_router)
+app.include_router(config_router)
