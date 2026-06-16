@@ -47,7 +47,11 @@ def _guarded(fn):
 
 @router.post("/sessions/{session_id}/approve")
 async def approve(session_id: str, body: ReviewBody):
-    return _guarded(lambda: _rel().approve(session_id, notes=body.notes))
+    result = _guarded(lambda: _rel().approve(session_id, notes=body.notes))
+    # Push succeeded — start monitoring the deployment in the background.
+    from .deploy import start_deploy
+    start_deploy(session_id)
+    return result
 
 
 @router.post("/sessions/{session_id}/reject")

@@ -18,6 +18,7 @@ from .config import ConfigHandler
 from .control import SessionController
 from .cost import MonthlyBudget
 from .database import Database
+from .deploy import DeploymentTracker
 from .execution import CodeExecutor, PreFlight
 from .input import ConversationManager
 from .newapp import NewAppProvisioner
@@ -48,6 +49,7 @@ class AppState:
     orchestrator: Orchestrator
     release: ReleaseManager
     provisioner: NewAppProvisioner
+    deploy_tracker: DeploymentTracker
 
 
 state = AppState()
@@ -103,6 +105,8 @@ async def lifespan(app: FastAPI):
     state.release = ReleaseManager(
         config, state.db, state.audit, state.executor, state.notifier,
         haiku=state.haiku)
+    state.deploy_tracker = DeploymentTracker(
+        config, state.db, state.audit, state.notifier)
     logger.info("Startup preflight: %s", state.preflight.startup())
 
     logger.info("DB ready. Audit logs at %s", audit_dir)
@@ -185,9 +189,11 @@ from .routes.control import router as control_router  # noqa: E402
 from .routes.pipeline import router as pipeline_router  # noqa: E402
 from .routes.release import router as release_router  # noqa: E402
 from .routes.newapp import router as newapp_router  # noqa: E402
+from .routes.deploy import router as deploy_router  # noqa: E402
 
 app.include_router(input_router)
 app.include_router(control_router)
 app.include_router(pipeline_router)
 app.include_router(release_router)
 app.include_router(newapp_router)
+app.include_router(deploy_router)
