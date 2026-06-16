@@ -25,7 +25,7 @@ Built phase by phase per `LOCAL_MANAGER_ARCHITECTURE.md`.
 | 7 | Auto-configuration (new apps) | ✅ done |
 | 8 | Deployment tracking (GHA/Railway/AWS/health) | ✅ done |
 | 9 | UI / web frontend (buildless single-page) | ✅ done |
-| 10 | Testing & polish | ⏳ |
+| 10 | Testing & polish (end-to-end integration) | ✅ done |
 
 ## Setup
 
