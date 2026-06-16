@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 class Orchestrator:
     def __init__(self, config, db, audit, *, controller, executor, preflight,
-                 budget, notifier, agent_factory: Callable,
+                 budget, notifier, agent_factory: Callable, provisioner=None,
                  run_existing_tests: bool = True):
         self._config = config
         self._db = db
@@ -35,6 +35,7 @@ class Orchestrator:
         self._budget = budget
         self._notifier = notifier
         self._agent_factory = agent_factory
+        self._provisioner = provisioner
         self._run_existing_tests = run_existing_tests
 
     # ------------------------------------------------------------------ #
@@ -125,7 +126,7 @@ class Orchestrator:
                                "passed": test_result.ok})
 
             if test_result.ok:
-                return self._finish(session_id, project, tracker, cycle)
+                return self._finish(session, project, tracker, cycle)
 
             # Failure -> new task for Opus (not a retry).
             instructions = sonnet.bug_from_failure(
@@ -171,9 +172,20 @@ class Orchestrator:
                 f"(${after:.2f} / ${self._budget.cap:.2f}).")
         return report
 
-    def _finish(self, session_id: str, project: Optional[str], tracker,
+    def _finish(self, session: dict, project: Optional[str], tracker,
                 cycle: int) -> dict:
+        session_id = session["id"]
         report = self._record_cost(session_id, project, tracker)
+
+        # New apps: auto-configure (.env section + setup log) on success.
+        setup_log = None
+        if session.get("task_type") == "new_app" and self._provisioner:
+            try:
+                prov = self._provisioner.provision(session, create_repo=False)
+                setup_log = prov.get("setup_log")
+            except Exception as exc:  # provisioning is non-fatal
+                logger.warning("Provisioning failed for %s: %s", session_id, exc)
+
         self._db.update_session(session_id, status="awaiting_approval")
         self._notifier.notify(
             "approval",
@@ -182,8 +194,11 @@ class Orchestrator:
                     f"cycle(s). Cost ${report.total:.2f}. Review to deploy.")
         logger.info("Session %s awaiting approval (cost $%.2f).",
                     session_id, report.total)
-        return {"status": "awaiting_approval", "cycles": cycle,
-                "cost": report.total}
+        result = {"status": "awaiting_approval", "cycles": cycle,
+                  "cost": report.total}
+        if setup_log:
+            result["setup_log"] = setup_log
+        return result
 
     def _escalate(self, session_id: str, project: Optional[str], tracker,
                   reason: str) -> dict:

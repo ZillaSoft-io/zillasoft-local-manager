@@ -13,6 +13,7 @@ _SAMPLE_ENV = textwrap.dedent(
     # Sample env for tests
     ANTHROPIC_API_KEY=<FILL>
     GITHUB_TOKEN=secret-token
+    GITHUB_OWNER=ZillaSoft-io
     STRIPE_SECRET_KEY=sk_test_x
     AUTH0_CLIENT_SECRET=abc
 

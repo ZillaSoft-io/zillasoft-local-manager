@@ -161,6 +161,7 @@ class ConversationManager:
             haiku_context={
                 "summary": turn.context_summary,
                 "recommended_stack": turn.recommended_stack,
+                "app_name": turn.app_name,
                 "scope_level": turn.scope_level,
                 "monthly_cap": turn.monthly_cap,
             },

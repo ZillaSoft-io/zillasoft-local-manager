@@ -20,6 +20,7 @@ from .cost import MonthlyBudget
 from .database import Database
 from .execution import CodeExecutor, PreFlight
 from .input import ConversationManager
+from .newapp import NewAppProvisioner
 from .notifications import Notifier
 from .orchestrator import Orchestrator
 from .release import ReleaseManager
@@ -46,6 +47,7 @@ class AppState:
     preflight: PreFlight
     orchestrator: Orchestrator
     release: ReleaseManager
+    provisioner: NewAppProvisioner
 
 
 state = AppState()
@@ -91,11 +93,13 @@ async def lifespan(app: FastAPI):
 
     state.executor = CodeExecutor(controller=state.controller)
     state.preflight = PreFlight(config, state.executor)
+    state.provisioner = NewAppProvisioner(config, state.db, state.audit)
     state.orchestrator = Orchestrator(
         config, state.db, state.audit,
         controller=state.controller, executor=state.executor,
         preflight=state.preflight, budget=state.budget,
-        notifier=state.notifier, agent_factory=lambda: build_agents(config))
+        notifier=state.notifier, agent_factory=lambda: build_agents(config),
+        provisioner=state.provisioner)
     state.release = ReleaseManager(
         config, state.db, state.audit, state.executor, state.notifier,
         haiku=state.haiku)
@@ -180,8 +184,10 @@ from .routes.input import router as input_router  # noqa: E402
 from .routes.control import router as control_router  # noqa: E402
 from .routes.pipeline import router as pipeline_router  # noqa: E402
 from .routes.release import router as release_router  # noqa: E402
+from .routes.newapp import router as newapp_router  # noqa: E402
 
 app.include_router(input_router)
 app.include_router(control_router)
 app.include_router(pipeline_router)
 app.include_router(release_router)
+app.include_router(newapp_router)

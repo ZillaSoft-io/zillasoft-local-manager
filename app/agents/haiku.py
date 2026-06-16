@@ -41,9 +41,10 @@ _CLARIFY_SCHEMA = {
         "scope_level": {"type": "string", "enum": ["capped", "uncapped", ""]},
         "monthly_cap": {"type": "number"},
         "recommended_stack": {"type": "string"},
+        "app_name": {"type": "string"},
     },
     "required": ["status", "message", "context_summary", "scope_level",
-                 "monthly_cap", "recommended_stack"],
+                 "monthly_cap", "recommended_stack", "app_name"],
     "additionalProperties": False,
 }
 
@@ -56,6 +57,7 @@ class ClarifyTurn:
     scope_level: str = ""
     monthly_cap: float = 0.0
     recommended_stack: str = ""
+    app_name: str = ""
 
 
 class HaikuAgent(Agent):
@@ -125,4 +127,5 @@ class HaikuAgent(Agent):
             scope_level=str(data.get("scope_level", "")),
             monthly_cap=float(data.get("monthly_cap", 0) or 0),
             recommended_stack=str(data.get("recommended_stack", "")),
+            app_name=str(data.get("app_name", "")),
         )
