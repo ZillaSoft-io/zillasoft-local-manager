@@ -558,7 +558,10 @@ function escapeHtml(s){ return (s||'').replace(/[&<>]/g,c=>(
   {'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function escapeAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
 
-boot();  // Auto-boot on load (local dev mode)
+// Auto-boot on load
+document.getElementById('app-header').style.display='flex';
+document.getElementById('app').style.display='flex';
+document.getElementById('main').innerHTML = '<div class="card"><h3>App Started</h3><p>Server is running!</p></div>';
 </script>
 </body>
 </html>
