@@ -32,13 +32,16 @@ from .cache import SessionCache
 from .change_complexity import get_change_analyzer
 from .cost import record_session_cost
 from .cost.budgeting import BudgetManager
+from .cost_estimation import get_cost_estimator
 from .crash_recovery import get_crash_recovery
 from .effort_routing import get_effort_router, EffortLevel
+from .escalation_messages import build_escalation_reason
 from .execution import run_tests
 from .execution.executor import CommandStopped
 from .feedback_loop import get_feedback_loop
 from .observability import get_observability
 from .persistent_cache import get_persistent_cache
+from .smart_retry import should_retry_with_refinement
 from .testing_router import get_test_analyzer
 from .vcs import GitOps
 
@@ -74,6 +77,17 @@ class Orchestrator:
         project = session.get("project")
         task_type = session.get("task_type")
         ctx = (session.get("haiku_context") or {}).get("summary") or ""
+
+        # Improvement 1: Cost estimation — predict cost before running
+        with self._observability.tracer.span("cost_estimation"):
+            estimator = get_cost_estimator()
+            cost_estimate = estimator.estimate_session(
+                task_complexity="complex" if task_type == "new_app" else "medium",
+                expected_cycles=int(self._config.get("LOCAL_MANAGER_MAX_CYCLES", 3) or 3),
+                simple_change=False
+            )
+            logger.info(f"Cost estimate: {estimator.format_estimate(cost_estimate)}")
+            self._db.update_session(session_id, cost_estimate=cost_estimate)
 
         # Phase 3: Budget check (prevent overspend)
         with self._observability.tracer.span("budget_check"):
@@ -136,8 +150,8 @@ class Orchestrator:
 
         if not dr.approved:
             return self._escalate(session_id, project, tracker,
-                                  f"Dry-run plan not approved by Haiku. "
-                                  f"Error: {dr.error}")
+                                  reason="plan_rejected",
+                                  context={"error": dr.error, "cycles": 1})
 
         # For Opus-routed tasks, skip cycle loop (already implemented)
         if dr.routing_decision == "opus":
@@ -286,12 +300,25 @@ class Orchestrator:
                 if self._feedback_loop.should_escalate(error_msg, project, cycle, max_cycles):
                     return self._escalate(
                         session_id, project, tracker,
-                        f"Test failed with known pattern (seen before). "
-                        f"Escalating instead of retry #{cycle + 1}.")
+                        reason="test_failed_pattern",
+                        context={"error": error_msg, "cycle": cycle, "max_cycles": max_cycles})
 
-                # Failure -> new task for Opus (not a retry).
-                instructions = sonnet.bug_from_failure(
-                    instructions=instructions, test_output=test_result.tail())
+                # Improvement 3: Smart retry — refine instead of regenerate if actionable
+                should_refine, prompt = should_retry_with_refinement(
+                    test_result.tail() or "",
+                    instructions,
+                    cycle - 1  # failure_count
+                )
+
+                if should_refine:
+                    # Refine existing implementation (cheaper, targeted)
+                    logger.info(f"Cycle {cycle}: Smart retry — refining instructions")
+                    instructions = prompt
+                else:
+                    # Regenerate from scratch (full analysis + reimplementation)
+                    logger.info(f"Cycle {cycle}: Smart retry — regenerating from scratch")
+                    instructions = sonnet.bug_from_failure(
+                        instructions=instructions, test_output=test_result.tail())
 
             except Exception as e:
                 # Crash during cycle: save error checkpoint and escalate
@@ -306,15 +333,16 @@ class Orchestrator:
 
                 return self._escalate(
                     session_id, project, tracker,
-                    f"Cycle {cycle} crashed during execution: {error_str}. "
-                    f"Progress saved to checkpoint — review cycle data and retry.")
+                    reason="test_crash",
+                    context={"cycle": cycle, "error": error_str})
 
         # Clean up all checkpoints for session after completion
         recovery.cleanup_session_checkpoints(session_id)
 
         return self._escalate(
             session_id, project, tracker,
-            f"Reached cycle limit ({max_cycles}) without passing tests.")
+            reason="cycle_limit",
+            context={"max_cycles": max_cycles, "last_failure": "Test still failing"})
 
     # ------------------------------------------------------------------ #
     # Targets
@@ -398,8 +426,14 @@ class Orchestrator:
         return result
 
     def _escalate(self, session_id: str, project: Optional[str], tracker,
-                  reason: str) -> dict:
+                  reason: str = "", context: dict = None) -> dict:
         report = self._record_cost(session_id, project, tracker)
+
+        # Improvement 2: Better escalation messages — context-aware reason building
+        if context:
+            escalation_msg = build_escalation_reason(reason, context)
+        else:
+            escalation_msg = reason or "Escalation required"
 
         # Phase 3: Record failure to ML router (learns which agent works best)
         session = self._db.get_session(session_id)
@@ -414,16 +448,16 @@ class Orchestrator:
             )
 
         self._db.update_session(session_id, status="failed",
-                                error_message=reason)
-        self._audit.update(session_id, project, {"escalation": {"reason": reason}})
+                                error_message=escalation_msg)
+        self._audit.update(session_id, project, {"escalation": {"reason": escalation_msg}})
         self._notifier.notify(
             "escalation",
             title="Escalation — needs you",
-            message=f"Session {session_id[:8]} escalated: {reason}",
+            message=f"Session {session_id[:8]} escalated: {escalation_msg[:100]}...",
             email_subject="ZillaSoft Local Manager — escalation",
-            email_html=f"<p>{reason}</p>")
-        logger.info("Session %s escalated: %s", session_id, reason)
-        return {"status": "escalated", "reason": reason, "cost": report.total}
+            email_html=f"<p>{escalation_msg}</p>")
+        logger.info("Session %s escalated: %s", session_id, escalation_msg)
+        return {"status": "escalated", "reason": escalation_msg, "cost": report.total}
 
     def _on_stop(self, session_id: str, project: Optional[str], tracker,
                  repo_path: str) -> dict:

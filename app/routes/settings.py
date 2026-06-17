@@ -17,6 +17,7 @@ from ..agents.registry import get_registry
 from ..cost.budgeting import BudgetManager
 from ..feedback_loop import get_feedback_loop
 from ..observability import get_observability
+from ..session_recovery import SessionRecoveryManager
 
 logger = logging.getLogger(__name__)
 
@@ -285,3 +286,38 @@ async def get_metrics() -> dict[str, Any]:
     """Get observability metrics."""
     obs = get_observability()
     return obs.export_metrics()
+
+
+# ============================================================================
+# Session recovery endpoints (Improvement 5)
+# ============================================================================
+
+@router.get("/recovery/incomplete-sessions")
+async def get_incomplete_sessions() -> dict[str, Any]:
+    """Get all sessions with incomplete cycles from crashes."""
+    recovery = SessionRecoveryManager()
+    incomplete = recovery.get_incomplete_sessions()
+
+    return {
+        "incomplete_count": len(incomplete),
+        "sessions": incomplete,
+        "summary": recovery.format_for_ui(incomplete),
+    }
+
+
+@router.get("/recovery/session/{session_id}")
+async def get_session_recovery_details(session_id: str) -> dict[str, Any]:
+    """Get recovery details for a specific incomplete session."""
+    recovery = SessionRecoveryManager()
+    details = recovery.get_session_details(session_id, _main.state.db)
+
+    if details is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Session {session_id} not found or already complete"
+        )
+
+    return {
+        "ok": True,
+        "recovery": details,
+    }
