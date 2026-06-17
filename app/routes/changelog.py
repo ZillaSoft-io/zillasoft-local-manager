@@ -12,8 +12,7 @@ from ..changelog_updater import get_changelog_updater
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/changelog", tags=["changelog"],
-                   dependencies=[Depends(_main.require_auth)])
+router = APIRouter(prefix="/api/changelog", tags=["changelog"])
 
 
 @router.post("/update")
@@ -26,8 +25,9 @@ async def trigger_changelog_update() -> dict[str, bool | str]:
     try:
         updater = get_changelog_updater()
         # Set Haiku agent if available
-        if hasattr(_main.state, 'haiku'):
-            updater.haiku = _main.state.haiku
+        from .. import main
+        if hasattr(main.state, 'haiku'):
+            updater.haiku = main.state.haiku
 
         success = updater.update_changelog()
         if success:

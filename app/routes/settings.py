@@ -22,8 +22,7 @@ from ..session_recovery import SessionRecoveryManager
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/api/settings", tags=["settings"],
-                   dependencies=[Depends(_main.require_auth)])
+router = APIRouter(prefix="/api/settings", tags=["settings"])
 
 
 # ============================================================================

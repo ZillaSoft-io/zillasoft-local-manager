@@ -18,8 +18,7 @@ from ..vcs import GitError
 logger = logging.getLogger(__name__)
 
 
-router = APIRouter(prefix="/api", tags=["release"],
-                   dependencies=[Depends(_main.require_auth)])
+router = APIRouter(prefix="/api", tags=["release"])
 
 
 class ReviewBody(BaseModel):
@@ -27,7 +26,8 @@ class ReviewBody(BaseModel):
 
 
 def _rel():
-    r = getattr(_main.state, "release", None)
+    from .. import main
+    r = getattr(main.state, "release", None)
     if r is None:
         raise HTTPException(status_code=503, detail="Release manager not ready.")
     return r

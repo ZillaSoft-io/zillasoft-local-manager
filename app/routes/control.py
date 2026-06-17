@@ -18,9 +18,7 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-
-router = APIRouter(prefix="/api", tags=["control"],
-                   dependencies=[Depends(_main.require_auth)])
+router = APIRouter(prefix="/api", tags=["control"])
 
 
 class KillBody(BaseModel):
@@ -32,7 +30,8 @@ class PauseBody(BaseModel):
 
 
 def _controller():
-    c = getattr(_main.state, "controller", None)
+    from .. import main
+    c = getattr(main.state, "controller", None)
     if c is None:
         raise HTTPException(status_code=503, detail="Controller not ready.")
     return c

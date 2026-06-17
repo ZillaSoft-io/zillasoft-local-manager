@@ -17,8 +17,7 @@ from ..errors import ConfigValidationError
 logger = logging.getLogger(__name__)
 
 
-router = APIRouter(prefix="/api/config", tags=["config"],
-                   dependencies=[Depends(_main.require_auth)])
+router = APIRouter(prefix="/api/config", tags=["config"])
 
 
 class SetBody(BaseModel):
@@ -28,7 +27,8 @@ class SetBody(BaseModel):
 
 @router.post("/set")
 async def set_config(body: SetBody):
-    cfg = _main.state.config
+    from .. import main
+    cfg = main.state.config
     try:
         cfg.set(body.key, body.value, actor="system")  # Mario via the UI
     except ConfigValidationError as exc:

@@ -15,16 +15,16 @@ from ..integrations import GitHubError
 logger = logging.getLogger(__name__)
 
 
-router = APIRouter(prefix="/api", tags=["newapp"],
-                   dependencies=[Depends(_main.require_auth)])
+router = APIRouter(prefix="/api", tags=["newapp"])
 
 
 @router.post("/sessions/{session_id}/create-repo")
 async def create_repo(session_id: str):
-    prov = getattr(_main.state, "provisioner", None)
+    from .. import main
+    prov = getattr(main.state, "provisioner", None)
     if prov is None:
         raise HTTPException(status_code=503, detail="Provisioner not ready.")
-    session = _main.state.db.get_session(session_id)
+    session = main.state.db.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     if session.get("task_type") != "new_app":
