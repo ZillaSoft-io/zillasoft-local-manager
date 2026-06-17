@@ -81,10 +81,34 @@ class FeedbackLoopManager:
 
     @staticmethod
     def _error_signature(error_msg: str) -> str:
-        """Generate signature from error message (first 100 chars + hash)."""
-        normalized = error_msg[:100].lower().strip()
-        h = hashlib.md5(error_msg.encode()).hexdigest()[:8]
-        return f"{normalized}#{h}"
+        """Optimization 5: Generate broader error signature from error CLASS, not full trace.
+
+        Extracts the error type (e.g., "AssertionError", "TypeError") and key context
+        (line with 'Error' or 'assert'), ignoring line numbers and timestamps.
+        This prevents signature explosion from minor variations.
+        """
+        lines = error_msg.split('\n')
+
+        # Extract lines with Error class or assertion failure
+        relevant_lines = []
+        for line in lines:
+            line = line.strip()
+            # Keep error class definitions and assertion lines
+            if any(keyword in line for keyword in ['Error:', 'AssertionError', 'TypeError',
+                                                     'AttributeError', 'KeyError', 'ValueError',
+                                                     'RuntimeError', 'assert ', 'failed']):
+                # Remove line numbers and timestamps to avoid signature explosion
+                cleaned = line
+                import re
+                cleaned = re.sub(r'line \d+', 'lineN', cleaned)
+                cleaned = re.sub(r'at 0x[0-9a-f]+', 'at 0xADDR', cleaned)
+                cleaned = re.sub(r'\d{10,}', 'NUM', cleaned)  # timestamps/IDs
+                relevant_lines.append(cleaned.lower())
+
+        # Use the first 3 relevant lines as signature
+        signature_text = ' | '.join(relevant_lines[:3]) if relevant_lines else error_msg[:100]
+        h = hashlib.md5(signature_text.encode()).hexdigest()[:8]
+        return f"{signature_text[:80]}#{h}"
 
     def has_seen_failure(self, error_msg: str, project: str) -> Optional[FailurePattern]:
         """Check if we've seen this error before.

@@ -96,11 +96,15 @@ async def lifespan(app: FastAPI):
     state.executor = CodeExecutor(controller=state.controller)
     state.preflight = PreFlight(config, state.executor)
     state.provisioner = NewAppProvisioner(config, state.db, state.audit)
+    # Optimization 1: Reuse cached agents instead of rebuilding per session
+    def get_cached_agents():
+        return state.haiku, state.sonnet, state.opus, state.usage
+
     state.orchestrator = Orchestrator(
         config, state.db, state.audit,
         controller=state.controller, executor=state.executor,
         preflight=state.preflight, budget=state.budget,
-        notifier=state.notifier, agent_factory=lambda: build_agents(config),
+        notifier=state.notifier, agent_factory=get_cached_agents,
         provisioner=state.provisioner)
     state.release = ReleaseManager(
         config, state.db, state.audit, state.executor, state.notifier,

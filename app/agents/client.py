@@ -122,6 +122,31 @@ class AnthropicClient:
             raw=message,
         )
 
+    # Optimization 3: Stream API for Opus (yield chunks as they arrive)
+    def complete_streaming(self, *, model: str, messages: list[dict],
+                          system: Optional[str] = None, max_tokens: int = 8000,
+                          effort: Optional[str] = None, thinking: bool = True,
+                          output_config: Optional[dict] = None,
+                          tools: Optional[list] = None, tool_choice: Optional[dict] = None,
+                          agent_label: str = "agent"):
+        """Stream response chunks (generator). Yields text chunks as they arrive."""
+        params = self._build_params(
+            model, system, messages, max_tokens, effort, thinking,
+            output_config, tools, tool_choice)
+        sdk = self._client()
+        try:
+            with sdk.messages.stream(**params) as s:
+                for text_event in s.text_stream:
+                    yield text_event
+                message = s.get_final_message()
+        except Exception as exc:
+            logger.error("Anthropic streaming call failed (%s): %s", model, exc)
+            raise AgentError(f"Anthropic call failed for {model}: {exc}") from exc
+
+        # Record usage after stream is complete
+        usage = Usage.from_response(getattr(message, "usage", None))
+        self.usage.record(agent_label, model, usage)
+
     @staticmethod
     def _extract_text(message: Any) -> str:
         """Concatenate text blocks from a response, ignoring thinking blocks."""

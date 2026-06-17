@@ -172,6 +172,46 @@ class CrashRecoveryManager:
             except Exception as e:
                 logger.warning(f"Failed to clean checkpoint {checkpoint_file}: {e}")
 
+    def cleanup_old_checkpoints(self, max_age_hours: int = 24) -> None:
+        """Optimization 4: Clean up old checkpoints to prevent disk bloat.
+
+        Keeps only the latest post_review checkpoint per session (for recovery).
+        Deletes all older failed attempts.
+
+        Args:
+            max_age_hours: Delete checkpoints older than this
+        """
+        from datetime import timedelta
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=max_age_hours)
+
+        # Group checkpoints by session
+        sessions: dict[str, list[Path]] = {}
+        for checkpoint_file in self.checkpoint_dir.glob("*.json"):
+            # Parse session_id from filename: {session_id}_c{cycle}_{type}.json
+            parts = checkpoint_file.stem.split("_")
+            if len(parts) >= 2:
+                session_id = parts[0]
+                if session_id not in sessions:
+                    sessions[session_id] = []
+                sessions[session_id].append(checkpoint_file)
+
+        # For each session, keep only the latest post_review checkpoint
+        for session_id, checkpoints in sessions.items():
+            # Sort by modification time, keep newest
+            sorted_checkpoints = sorted(checkpoints, key=lambda p: p.stat().st_mtime, reverse=True)
+
+            for checkpoint_file in sorted_checkpoints[1:]:  # Skip the newest
+                try:
+                    # Only delete if older than cutoff
+                    mtime = datetime.fromtimestamp(
+                        checkpoint_file.stat().st_mtime, tz=timezone.utc
+                    )
+                    if mtime < cutoff:
+                        checkpoint_file.unlink()
+                        logger.debug(f"Cleaned up old checkpoint: {checkpoint_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean old checkpoint {checkpoint_file}: {e}")
+
 
 # Global recovery manager
 _recovery: CrashRecoveryManager | None = None
