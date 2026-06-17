@@ -11,7 +11,6 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from .. import main as _main
 from ..agent_fallback import get_fallback_chain
 from ..agents.ml_routing import get_ml_router
 from ..agents.registry import get_registry

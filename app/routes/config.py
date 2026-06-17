@@ -16,7 +16,6 @@ from ..errors import ConfigValidationError
 
 logger = logging.getLogger(__name__)
 
-from .. import main as _main  # noqa: E402
 
 router = APIRouter(prefix="/api/config", tags=["config"],
                    dependencies=[Depends(_main.require_auth)])

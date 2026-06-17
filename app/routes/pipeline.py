@@ -17,7 +17,6 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-from .. import main as _main  # noqa: E402
 from ..batch_executor import get_batch_executor, BatchTask
 
 router = APIRouter(prefix="/api", tags=["pipeline"],

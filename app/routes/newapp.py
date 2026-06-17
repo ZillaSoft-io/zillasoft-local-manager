@@ -14,7 +14,6 @@ from ..integrations import GitHubError
 
 logger = logging.getLogger(__name__)
 
-from .. import main as _main  # noqa: E402
 
 router = APIRouter(prefix="/api", tags=["newapp"],
                    dependencies=[Depends(_main.require_auth)])

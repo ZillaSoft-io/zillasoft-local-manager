@@ -8,7 +8,6 @@ import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from .. import main as _main
 from ..changelog_updater import get_changelog_updater
 
 logger = logging.getLogger(__name__)
