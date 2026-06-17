@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import subprocess
+import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -113,16 +114,39 @@ class ChangelogUpdater:
 
         return categories
 
+    def _write_commits_to_temp_file(self, commits: list[dict]) -> Path:
+        """Write commits to a temp file for Haiku to read."""
+        commit_lines = []
+        for c in commits[:10]:  # Limit to 10 commits
+            commit_lines.append(f"- {c['subject']}")
+            if c.get('body'):
+                # Add first line of body if available
+                body_first = c['body'].split('\n')[0].strip()
+                if body_first:
+                    commit_lines.append(f"  ({body_first})")
+
+        # Create temp file
+        temp_file = Path(tempfile.gettempdir()) / f"zlm_changelog_{datetime.now().timestamp()}.txt"
+        with open(temp_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(commit_lines))
+
+        logger.debug(f"Wrote commits to temp file: {temp_file}")
+        return temp_file
+
     def _summarize_with_haiku(self, commits: list[dict]) -> Optional[str]:
-        """Use Haiku to summarize a list of commits."""
+        """Use Haiku to read commits from temp file and summarize."""
         if not self.haiku or not commits:
             return None
 
-        commit_text = "\n".join([
-            f"- {c['subject']}" for c in commits[:10]  # Limit to 10 commits for context
-        ])
-
+        temp_file = None
         try:
+            # Write commits to temp file
+            temp_file = self._write_commits_to_temp_file(commits)
+
+            # Read file contents
+            with open(temp_file, "r", encoding="utf-8") as f:
+                commit_text = f.read()
+
             prompt = f"""Summarize these ZillaSoft commits into 1-2 sentences for a changelog entry.
 Be specific but concise. Focus on user impact.
 
@@ -133,9 +157,19 @@ Changelog entry (1-2 sentences):"""
 
             response = self.haiku.invoke(prompt, max_tokens=100)
             return response.strip() if response else None
+
         except Exception as e:
             logger.warning(f"Failed to summarize with Haiku: {e}")
             return None
+
+        finally:
+            # Clean up temp file
+            if temp_file and temp_file.exists():
+                try:
+                    temp_file.unlink()
+                    logger.debug(f"Deleted temp file: {temp_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete temp file: {e}")
 
     def should_update(self) -> bool:
         """Check if 24 hours have passed since last update."""
