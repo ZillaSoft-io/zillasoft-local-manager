@@ -36,6 +36,7 @@ from .execution.executor import CommandStopped
 from .feedback_loop import get_feedback_loop
 from .observability import get_observability
 from .persistent_cache import get_persistent_cache
+from .testing_router import get_test_analyzer
 from .vcs import GitOps
 
 logger = logging.getLogger(__name__)
@@ -168,25 +169,34 @@ class Orchestrator:
             # The final test run is short — not cancellable (the cancellable
             # unit is Opus's bash loop, checked above and between its steps).
             test_result = run_tests(self._executor, repo_path, test_command)
-            review = sonnet.review_after_tests(
+
+            # Intelligent test routing: use Haiku for simple tests, Sonnet for complex
+            analyzer = get_test_analyzer()
+            review_agent = analyzer.get_routed_agent(
+                test_result.tail() or "", test_result.ok, haiku, sonnet)
+            review = review_agent.review_after_tests(
                 opus_summary=opus_summary, test_summary=test_result.summary,
                 passed=test_result.ok)
+
+            # Track which agent reviewed tests
+            reviewer_agent = "haiku" if review_agent == haiku else "sonnet"
+            logger.info(f"Test review routed to {reviewer_agent}")
 
             self._audit.append_cycle(session_id, project, {
                 "cycle_num": cycle,
                 "opus": {"commands": opus_result.commands,
                          "steps": opus_result.steps,
                          "commit_sha": opus_result.last_commit_sha},
-                "sonnet": {"test_summary": test_result.summary,
-                           "test_passed": test_result.ok, "review": review},
+                "test_review": {"agent": reviewer_agent, "summary": test_result.summary,
+                                "passed": test_result.ok, "review": review},
             })
             self._db.update_session(
                 session_id, cycle_count=cycle,
                 opus_changes={"commands": opus_result.commands,
                               "commit_sha": opus_result.last_commit_sha},
-                sonnet_review={"summary": opus_summary, "review": review,
-                               "test_summary": test_result.summary,
-                               "passed": test_result.ok})
+                test_review={"agent": reviewer_agent, "review": review,
+                             "test_summary": test_result.summary,
+                             "passed": test_result.ok})
 
             if test_result.ok:
                 return self._finish(session, project, tracker, cycle)
