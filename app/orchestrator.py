@@ -32,6 +32,7 @@ from .cache import SessionCache
 from .change_complexity import get_change_analyzer
 from .cost import record_session_cost
 from .cost.budgeting import BudgetManager
+from .effort_routing import get_effort_router, EffortLevel
 from .execution import run_tests
 from .execution.executor import CommandStopped
 from .feedback_loop import get_feedback_loop
@@ -182,30 +183,56 @@ class Orchestrator:
             test_analyzer = get_test_analyzer()
             review_agent = test_analyzer.get_routed_agent(
                 test_result.tail() or "", test_result.ok, haiku, sonnet)
+
+            # Intelligent effort routing: control thinking depth based on complexity
+            effort_router = get_effort_router()
+            review_effort = effort_router.analyze_task_complexity(
+                task_type="test_review",
+                has_failures=not test_result.ok,
+                change_complexity="simple" if test_runner_name == "haiku" else "complex"
+            )
+            effort_config = effort_router.get_effort_config(review_effort)
+
             review = review_agent.review_after_tests(
                 opus_summary=opus_summary, test_summary=test_result.summary,
-                passed=test_result.ok)
+                passed=test_result.ok,
+                thinking_budget_tokens=effort_config["thinking_budget_tokens"])
 
-            # Track which agents ran and reviewed tests
+            # Track which agents ran and reviewed tests, and effort levels used
             review_agent_name = "haiku" if review_agent == haiku else "sonnet"
-            logger.info(f"Tests run by {test_runner_name}, reviewed by {review_agent_name}")
+            logger.info(
+                f"Tests run by {test_runner_name}, "
+                f"reviewed by {review_agent_name} ({review_effort.value} effort)"
+            )
 
             self._audit.append_cycle(session_id, project, {
                 "cycle_num": cycle,
                 "opus": {"commands": opus_result.commands,
                          "steps": opus_result.steps,
                          "commit_sha": opus_result.last_commit_sha},
-                "testing": {"runner": test_runner_name, "reviewer": review_agent_name,
-                            "summary": test_result.summary, "passed": test_result.ok,
-                            "review": review},
+                "testing": {
+                    "runner": test_runner_name,
+                    "reviewer": review_agent_name,
+                    "review_effort": review_effort.value,
+                    "thinking_budget_tokens": effort_config["thinking_budget_tokens"],
+                    "summary": test_result.summary,
+                    "passed": test_result.ok,
+                    "review": review
+                },
             })
             self._db.update_session(
                 session_id, cycle_count=cycle,
                 opus_changes={"commands": opus_result.commands,
                               "commit_sha": opus_result.last_commit_sha},
-                testing={"runner": test_runner_name, "reviewer": review_agent_name,
-                         "review": review, "test_summary": test_result.summary,
-                         "passed": test_result.ok})
+                testing={
+                    "runner": test_runner_name,
+                    "reviewer": review_agent_name,
+                    "review_effort": review_effort.value,
+                    "thinking_budget_tokens": effort_config["thinking_budget_tokens"],
+                    "review": review,
+                    "test_summary": test_result.summary,
+                    "passed": test_result.ok
+                })
 
             if test_result.ok:
                 return self._finish(session, project, tracker, cycle)
