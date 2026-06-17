@@ -13,7 +13,8 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
-from .agents.dry_run import run_dry_run
+from .agents.phase2_orchestration import run_phase2_orchestration
+from .cache import SessionCache
 from .cost import record_session_cost
 from .execution import run_tests
 from .execution.executor import CommandStopped
@@ -67,17 +68,47 @@ class Orchestrator:
 
         self._db.update_session(session_id, status="in_progress")
 
-        # ---- dry-run handshake (Phase 2b) ----
+        # ---- Phase 2: plan + route + execute ----
         max_cycles = int(self._config.get("LOCAL_MANAGER_MAX_CYCLES", 3) or 3)
-        dr = run_dry_run(sonnet, haiku, context=ctx, original_intent=ctx,
-                         max_rounds=max_cycles)
+        cache = SessionCache()
+        dr = run_phase2_orchestration(
+            haiku=haiku,
+            sonnet=sonnet,
+            opus=opus,
+            context=ctx,
+            original_intent=ctx,
+            session_id=session_id,
+            max_rounds=max_cycles,
+            cache=cache,
+        )
+
+        # Store plan, routing decision, cost breakdown
         self._db.update_session(session_id, sonnet_instructions={
-            "plan": dr.plan, "instructions": dr.instructions,
-            "approved": dr.approved})
+            "plan": dr.plan,
+            "instructions": dr.implementation,
+            "approved": dr.approved,
+            "routing_decision": dr.routing_decision,
+        })
+
+        # Store cost breakdown
+        if dr.cost_breakdown:
+            self._db.update_session(session_id,
+                cost_breakdown=dr.cost_breakdown.to_dict(),
+                total_cost=dr.cost_breakdown.total_cost_usd,
+                total_tokens_used=dr.cost_breakdown.total_tokens,
+            )
+
         if not dr.approved:
             return self._escalate(session_id, project, tracker,
-                                  "Dry-run plan not approved by Haiku.")
-        instructions = dr.instructions
+                                  f"Dry-run plan not approved by Haiku. "
+                                  f"Error: {dr.error}")
+
+        # For Opus-routed tasks, skip cycle loop (already implemented)
+        if dr.routing_decision == "opus":
+            instructions = dr.implementation
+        else:
+            # For Haiku-routed simple tasks, treat as complete
+            return self._finish(session, project, tracker, cycle=0)
 
         # ---- cycle loop ----
         for cycle in range(1, max_cycles + 1):
