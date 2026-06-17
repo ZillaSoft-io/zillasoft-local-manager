@@ -9,7 +9,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class MLRouter:
         except Exception as e:
             logger.error(f"Failed to save stats: {e}")
 
-    def best_agent(self, project: str) -> str:
+    def best_agent(self, project: str, fallback_agent: str = "haiku") -> str:
         """Get best-performing agent for project.
 
         Falls back to keyword-based routing if no history.
@@ -105,8 +105,9 @@ class MLRouter:
             Agent label ("haiku", "opus", etc.)
         """
         if project not in self.stats or not self.stats[project]:
-            # No history: default to routing (let caller decide)
-            return "default"
+            # Cold-start: use safe default (Haiku is cheaper)
+            logger.debug(f"ML routing: no history for {project}, using {fallback_agent}")
+            return fallback_agent
 
         agents = self.stats[project]
         best = max(agents.values(), key=lambda a: a.score)
@@ -156,11 +157,17 @@ class MLRouter:
             f"Recorded {project}/{agent}: success={success}, "
             f"cost=${cost_usd:.2f}, duration={duration_ms:.0f}ms"
         )
+        # Always save immediately to prevent in-flight learning loss on crash
         self._save_stats()
 
     def get_stats(self, project: str) -> dict[str, AgentStats]:
         """Get all agent stats for a project."""
         return self.stats.get(project, {})
+
+    def flush(self) -> None:
+        """Force save stats to disk (safety mechanism for crash recovery)."""
+        self._save_stats()
+        logger.debug("ML router stats flushed to disk")
 
     def summary(self) -> dict[str, Any]:
         """Summary across all projects."""

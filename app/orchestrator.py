@@ -236,6 +236,12 @@ class Orchestrator:
                 "Cost warning",
                 f"{int(t * 100)}% of the monthly cap reached "
                 f"(${after:.2f} / ${self._budget.cap:.2f}).")
+
+        # Export observability data before resetting
+        obs_data = self._observability.export_all()
+        self._audit.update(session_id, project, {"observability": obs_data})
+        self._observability.reset()
+
         return report
 
     def _finish(self, session: dict, project: Optional[str], tracker,

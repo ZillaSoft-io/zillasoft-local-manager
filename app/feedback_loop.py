@@ -146,9 +146,9 @@ class FeedbackLoopManager:
         """Determine if we should escalate instead of retry.
 
         Escalate if:
-        - Error was seen before in this project (pattern repeat)
+        - Error was seen 3+ times before (pattern likely fundamental, not transient)
         - We're in final cycle (no retries left)
-        - Error seems fundamental (not transient)
+        - Error is high-confidence (many prior occurrences)
 
         Returns:
             True if escalation is recommended
@@ -157,14 +157,15 @@ class FeedbackLoopManager:
         if not pattern:
             return False
 
-        # Escalate on repeat failures
-        if pattern.occurrences >= 2:
+        # Escalate only on persistent failures (3+ occurrences = likely fundamental)
+        # Allow 1-2 retries for transient failures (network, rate limits)
+        if pattern.occurrences >= 3:
             logger.warning(
-                f"Escalation recommended: error seen {pattern.occurrences} times before"
+                f"Escalation recommended: error seen {pattern.occurrences} times (likely fundamental)"
             )
             return True
 
-        # Escalate on final cycle
+        # Escalate on final cycle regardless
         if current_cycle >= max_cycles:
             return True
 

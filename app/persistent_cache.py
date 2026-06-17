@@ -29,6 +29,8 @@ class PersistentCache:
         self.db_path = Path(db_path)
         self.ttl_hours = ttl_hours
         self._init_db()
+        # Clean up expired entries on startup (prevent unbounded DB growth)
+        self.cleanup_expired()
 
     def _init_db(self) -> None:
         """Initialize cache database."""

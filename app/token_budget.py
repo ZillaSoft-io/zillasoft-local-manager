@@ -46,8 +46,12 @@ class TokenTracker:
                          agent: str) -> tuple[bool, list[str]]:
         """Check if a single call should proceed.
 
+        Always allows (returns True) but warns on soft/hard limit breaches.
+        Soft limits = warning (proceeds with cost tracking).
+        Hard limits = warning + cost tracking (no hard reject to prevent workflow deadlock).
+
         Returns:
-            (allowed, warnings) - allowed=False means reject, warnings list
+            (allowed=True, warnings) - always proceeds, warnings list may be empty
         """
         warnings = []
 
@@ -64,16 +68,18 @@ class TokenTracker:
                 f"(soft limit: {self.budget.output_soft_limit:,})"
             )
 
-        # Check hard limits
+        # Check hard limits (warn but allow — no hard reject to prevent deadlock)
         if input_tokens > self.budget.input_hard_limit:
-            rejection = f"Input tokens {input_tokens:,} exceed hard limit {self.budget.input_hard_limit:,}"
-            self.rejections.append(rejection)
-            return False, [rejection]
+            warnings.append(
+                f"⚠️ Input tokens {input_tokens:,} exceed hard limit {self.budget.input_hard_limit:,} "
+                f"— proceeding with cost tracking"
+            )
 
         if output_tokens > self.budget.output_hard_limit:
-            rejection = f"Output tokens {output_tokens:,} exceed hard limit {self.budget.output_hard_limit:,}"
-            self.rejections.append(rejection)
-            return False, [rejection]
+            warnings.append(
+                f"⚠️ Output tokens {output_tokens:,} exceed hard limit {self.budget.output_hard_limit:,} "
+                f"— proceeding with cost tracking"
+            )
 
         return True, warnings
 
