@@ -72,68 +72,58 @@ def _configure_logging(level_name: str) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # ---- startup ----
-    config = ConfigHandler()
-    _configure_logging(config.get_raw("LOCAL_MANAGER_LOG_LEVEL", "INFO"))
-    logger.info("ZillaSoft Local Manager v%s starting up.", __version__)
+    try:
+        print("[STARTUP] Lifespan startup starting...")
+        config = ConfigHandler()
+        _configure_logging(config.get_raw("LOCAL_MANAGER_LOG_LEVEL", "INFO"))
+        logger.info("ZillaSoft Local Manager v%s starting up.", __version__)
 
-    state.config = config
-    state.db = Database(config.resolve_path("LOCAL_MANAGER_DB_PATH",
-                                            "./local_manager.db"))
-    audit_dir = config.resolve_path("LOCAL_MANAGER_AUDIT_LOG_PATH",
-                                    "./audit_logs/")
-    state.audit = AuditTrail(audit_dir)
-    state.auth_token = config.ensure_auth_token()
+        state.config = config
+        state.db = Database(config.resolve_path("LOCAL_MANAGER_DB_PATH", "./local_manager.db"))
+        audit_dir = config.resolve_path("LOCAL_MANAGER_AUDIT_LOG_PATH", "./audit_logs/")
+        state.audit = AuditTrail(audit_dir)
+        state.auth_token = config.ensure_auth_token()
 
-    # Option 2: Support mock mode for testing (LOCAL_MANAGER_MOCK_MODE=true)
-    mock_mode = config.get_raw("LOCAL_MANAGER_MOCK_MODE", "false").lower() == "true"
-    if mock_mode:
-        logger.info("⚠️  MOCK MODE ENABLED — Using recorded responses, no API calls")
+        mock_mode = config.get_raw("LOCAL_MANAGER_MOCK_MODE", "false").lower() == "true"
+        if mock_mode:
+            logger.info("MOCK MODE ENABLED")
 
-    haiku, sonnet, opus, usage = build_agents(config, mock_mode=mock_mode)
-    state.haiku, state.sonnet, state.opus, state.usage = haiku, sonnet, opus, usage
-    state.conversation = ConversationManager(config, state.db, state.audit, haiku)
+        haiku, sonnet, opus, usage = build_agents(config, mock_mode=mock_mode)
+        state.haiku, state.sonnet, state.opus, state.usage = haiku, sonnet, opus, usage
+        state.conversation = ConversationManager(config, state.db, state.audit, haiku)
 
-    state.budget = MonthlyBudget(config)
-    if state.budget.maybe_reset():
-        logger.info("Monthly spend auto-reset on startup.")
-    state.notifier = Notifier(config)
-    state.controller = SessionController(
-        config, state.db, state.audit,
-        pause_dir=config.root / "paused", notifier=state.notifier)
-    swept = state.controller.sweep_expired()
-    if swept:
-        logger.info("Swept %d expired paused session(s) on startup.", swept)
+        state.budget = MonthlyBudget(config)
+        if state.budget.maybe_reset():
+            logger.info("Monthly spend auto-reset on startup.")
+        state.notifier = Notifier(config)
+        state.controller = SessionController(config, state.db, state.audit, pause_dir=config.root / "paused", notifier=state.notifier)
+        swept = state.controller.sweep_expired()
+        if swept:
+            logger.info("Swept %d expired paused session(s) on startup.", swept)
 
-    state.executor = CodeExecutor(controller=state.controller)
-    state.preflight = PreFlight(config, state.executor)
-    state.provisioner = NewAppProvisioner(config, state.db, state.audit)
-    # Optimization 1: Reuse cached agents instead of rebuilding per session
-    def get_cached_agents():
-        # In mock mode, agents are already created; just return them
-        return state.haiku, state.sonnet, state.opus, state.usage
+        state.executor = CodeExecutor(controller=state.controller)
+        state.preflight = PreFlight(config, state.executor)
+        state.provisioner = NewAppProvisioner(config, state.db, state.audit)
 
-    state.orchestrator = Orchestrator(
-        config, state.db, state.audit,
-        controller=state.controller, executor=state.executor,
-        preflight=state.preflight, budget=state.budget,
-        notifier=state.notifier, agent_factory=get_cached_agents,
-        provisioner=state.provisioner)
-    state.release = ReleaseManager(
-        config, state.db, state.audit, state.executor, state.notifier,
-        haiku=state.haiku)
-    state.deploy_tracker = DeploymentTracker(
-        config, state.db, state.audit, state.notifier)
-    logger.info("Startup preflight: %s", state.preflight.startup())
+        def get_cached_agents():
+            return state.haiku, state.sonnet, state.opus, state.usage
 
-    logger.info("DB ready. Audit logs at %s", audit_dir)
-    logger.info(
-        "API auth token (send as 'Authorization: Bearer <token>'):\n  %s",
-        state.auth_token,
-    )
+        state.orchestrator = Orchestrator(config, state.db, state.audit, controller=state.controller, executor=state.executor, preflight=state.preflight, budget=state.budget, notifier=state.notifier, agent_factory=get_cached_agents, provisioner=state.provisioner)
+        state.release = ReleaseManager(config, state.db, state.audit, state.executor, state.notifier, haiku=state.haiku)
+        state.deploy_tracker = DeploymentTracker(config, state.db, state.audit, state.notifier)
+        logger.info("Startup preflight: %s", state.preflight.startup())
 
-    # Stability 3: Start proactive health monitoring
-    await start_health_monitoring(state.haiku.client)
+        logger.info("DB ready. Audit logs at %s", audit_dir)
+        logger.info("API auth token: %s", state.auth_token)
+
+        await start_health_monitoring(state.haiku.client)
+        print("[STARTUP] App ready on http://localhost:5555")
+
+    except Exception as e:
+        print(f"[ERROR] Startup failed: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
+        raise
 
     yield
 
