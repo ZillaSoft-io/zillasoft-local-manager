@@ -14,10 +14,14 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .agents.phase2_orchestration import run_phase2_orchestration
+from .agents.ml_routing import get_ml_router
 from .cache import SessionCache
 from .cost import record_session_cost
+from .cost.budgeting import BudgetManager
 from .execution import run_tests
 from .execution.executor import CommandStopped
+from .observability import get_observability
+from .persistent_cache import get_persistent_cache
 from .vcs import GitOps
 
 logger = logging.getLogger(__name__)
@@ -38,6 +42,10 @@ class Orchestrator:
         self._agent_factory = agent_factory
         self._provisioner = provisioner
         self._run_existing_tests = run_existing_tests
+        # Phase 3 managers
+        self._ml_router = get_ml_router()
+        self._persistent_cache = get_persistent_cache()
+        self._observability = get_observability()
 
     # ------------------------------------------------------------------ #
     def run_session(self, session_id: str) -> dict:
@@ -47,6 +55,14 @@ class Orchestrator:
         project = session.get("project")
         task_type = session.get("task_type")
         ctx = (session.get("haiku_context") or {}).get("summary") or ""
+
+        # Phase 3: Budget check (prevent overspend)
+        with self._observability.tracer.span("budget_check"):
+            if not self._budget.can_accept_task():
+                return {
+                    "status": "rejected",
+                    "reason": f"Budget limit reached: ${self._budget.current_spend:.2f} / ${self._budget.monthly_cap:.2f}",
+                }
 
         haiku, sonnet, opus, tracker = self._agent_factory()
         repo_path, test_command = self._target(session)
@@ -71,16 +87,17 @@ class Orchestrator:
         # ---- Phase 2: plan + route + execute ----
         max_cycles = int(self._config.get("LOCAL_MANAGER_MAX_CYCLES", 3) or 3)
         cache = SessionCache()
-        dr = run_phase2_orchestration(
-            haiku=haiku,
-            sonnet=sonnet,
-            opus=opus,
-            context=ctx,
-            original_intent=ctx,
-            session_id=session_id,
-            max_rounds=max_cycles,
-            cache=cache,
-        )
+        with self._observability.tracer.span("phase2_orchestration", project=project, task_type=task_type):
+            dr = run_phase2_orchestration(
+                haiku=haiku,
+                sonnet=sonnet,
+                opus=opus,
+                context=ctx,
+                original_intent=ctx,
+                session_id=session_id,
+                max_rounds=max_cycles,
+                cache=cache,
+            )
 
         # Store plan, routing decision, cost breakdown
         self._db.update_session(session_id, sonnet_instructions={
@@ -208,6 +225,17 @@ class Orchestrator:
         session_id = session["id"]
         report = self._record_cost(session_id, project, tracker)
 
+        # Phase 3: Record success to ML router (learns which agent works best)
+        if project and session.get("routing_decision"):
+            agent = session.get("routing_decision")
+            self._ml_router.record_task(
+                project=project,
+                agent=agent,
+                success=True,
+                cost_usd=report.total,
+                duration_ms=0,  # Would need start time to calculate
+            )
+
         # New apps: auto-configure (.env section + setup log) on success.
         setup_log = None
         if session.get("task_type") == "new_app" and self._provisioner:
@@ -234,6 +262,19 @@ class Orchestrator:
     def _escalate(self, session_id: str, project: Optional[str], tracker,
                   reason: str) -> dict:
         report = self._record_cost(session_id, project, tracker)
+
+        # Phase 3: Record failure to ML router (learns which agent works best)
+        session = self._db.get_session(session_id)
+        if session and project and session.get("routing_decision"):
+            agent = session.get("routing_decision")
+            self._ml_router.record_task(
+                project=project,
+                agent=agent,
+                success=False,
+                cost_usd=report.total,
+                duration_ms=0,
+            )
+
         self._db.update_session(session_id, status="failed",
                                 error_message=reason)
         self._audit.update(session_id, project, {"escalation": {"reason": reason}})
