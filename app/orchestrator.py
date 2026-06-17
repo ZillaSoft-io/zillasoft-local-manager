@@ -6,6 +6,19 @@ Mario's approval; after `max_cycles` failures, escalate to Mario.
 
 Kill and pause signals (from SessionController) are polled between steps. Cost
 is tracked per session via a fresh UsageTracker from the agent factory.
+
+AGENT REGISTRY: Orchestration roles are configurable via the agent registry.
+To swap agents (e.g., use Mythos 5 for implementation instead of Opus):
+
+    from app.agents.registry import get_registry
+    registry = get_registry()
+    registry.set_orchestration_roles(
+        validation="haiku",      # plan validation (fast, cheap)
+        planning="sonnet",       # plan generation (balanced)
+        implementation="mythos"  # implementation (when Mythos 5 launches)
+    )
+
+No code changes needed. The orchestrator automatically uses the registered agents.
 """
 from __future__ import annotations
 

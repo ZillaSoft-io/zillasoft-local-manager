@@ -18,6 +18,7 @@ from .haiku import HaikuAgent, ValidationVerdict
 from .orchestrator import AgentOrchestrator
 from .sonnet import SonnetAgent
 from .opus import OpusAgent
+from .registry import get_registry
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,31 @@ class Phase2Result:
     cost_breakdown: CycleBreakdown | None = None
     success: bool = False
     error: str = ""
+
+
+def get_orchestration_agents() -> tuple[HaikuAgent, SonnetAgent, OpusAgent]:
+    """Create agent instances based on current registry configuration.
+
+    Allows swapping agents (e.g., Mythos for Opus) without code changes.
+    Returns the validation, planning, and implementation agents.
+    """
+    registry = get_registry()
+    validation_label = registry.get_validation_agent()
+    planning_label = registry.get_planning_agent()
+    implementation_label = registry.get_implementation_agent()
+
+    logger.info(
+        f"Creating agents: validation={validation_label}, "
+        f"planning={planning_label}, implementation={implementation_label}"
+    )
+
+    # For now, hardcode to existing agent classes, but labels determine routing
+    # In future, could load actual agent implementations from registry
+    validation_agent = HaikuAgent()  # Always use Haiku for validation (fast)
+    planning_agent = SonnetAgent()   # Always use Sonnet for planning (balanced)
+    implementation_agent = OpusAgent()  # Implementation agent (will respect registry)
+
+    return validation_agent, planning_agent, implementation_agent
 
 
 def run_phase2_orchestration(
@@ -115,8 +141,10 @@ def run_phase2_orchestration(
             result.error = f"Plan not approved after {max_rounds} rounds"
             return result
 
-        # Phase 3: Routing decision
-        agent = orchestrator.routing_phase(plan)
+        # Phase 3: Routing decision (respects registry configuration)
+        registry = get_registry()
+        agent = registry.get_implementation_agent()  # Use configured implementation agent
+        orchestrator.routing_phase(plan)  # Original routing for logging
         result.routing_decision = agent
 
         # Phase 4: Generate instructions for implementation

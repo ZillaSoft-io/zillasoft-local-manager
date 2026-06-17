@@ -35,6 +35,10 @@ class AgentRegistry:
     def __init__(self):
         self._agents: dict[str, AgentConfig] = {}
         self._primary_agent_order = ["haiku", "sonnet", "opus"]
+        # Configurable orchestration roles (swappable for future agents)
+        self._validation_agent = "haiku"  # fast, cheap validation
+        self._implementation_agent = "opus"  # powerful implementation
+        self._planning_agent = "sonnet"  # balanced planning
 
     def register(self, config: AgentConfig) -> None:
         """Register an agent configuration."""
@@ -68,6 +72,42 @@ class AgentRegistry:
             if config.cost_tier == tier:
                 return config
         raise ValueError(f"No agent found with cost_tier={tier}")
+
+    def set_orchestration_roles(self, validation: str = None, implementation: str = None,
+                                planning: str = None) -> None:
+        """Configure which agents to use for orchestration roles.
+
+        Allows swapping agents (e.g., when Mythos 5 launches) without code changes.
+
+        Args:
+            validation: agent label for plan validation (default: "haiku")
+            implementation: agent label for implementation (default: "opus")
+            planning: agent label for plan generation (default: "sonnet")
+        """
+        if validation:
+            self.get(validation)  # Verify it exists
+            self._validation_agent = validation
+            logger.info(f"Set validation agent: {validation}")
+        if implementation:
+            self.get(implementation)
+            self._implementation_agent = implementation
+            logger.info(f"Set implementation agent: {implementation}")
+        if planning:
+            self.get(planning)
+            self._planning_agent = planning
+            logger.info(f"Set planning agent: {planning}")
+
+    def get_validation_agent(self) -> str:
+        """Get agent label for plan validation."""
+        return self._validation_agent
+
+    def get_implementation_agent(self) -> str:
+        """Get agent label for implementation."""
+        return self._implementation_agent
+
+    def get_planning_agent(self) -> str:
+        """Get agent label for plan generation."""
+        return self._planning_agent
 
 
 # Global registry instance
