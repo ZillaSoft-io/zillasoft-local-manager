@@ -1,0 +1,38 @@
+[
+  {
+    "timestamp": "2026-01-15T10:30:00Z",
+    "model": "claude-3-5-sonnet-20241022",
+    "prompt_hash": "abc123",
+    "response_text": "## Plan\n\n1. Analyze the codebase structure\n2. Identify the failing test\n3. Implement the fix\n4. Verify with tests\n\nThis approach ensures we understand the problem fully before making changes.",
+    "tokens_input": 2500,
+    "tokens_output": 350,
+    "latency_ms": 2300.0
+  },
+  {
+    "timestamp": "2026-01-15T10:32:00Z",
+    "model": "claude-3-5-haiku-20241022",
+    "prompt_hash": "def456",
+    "response_text": "Plan looks good. The approach is sound and follows the repository conventions.",
+    "tokens_input": 1200,
+    "tokens_output": 45,
+    "latency_ms": 450.0
+  },
+  {
+    "timestamp": "2026-01-15T10:33:00Z",
+    "model": "claude-opus-4-1-20250805",
+    "prompt_hash": "ghi789",
+    "response_text": "I'll implement the fix by:\n1. Adding the missing validation check in the config parser\n2. Creating unit tests for the new validation\n3. Running the full test suite to ensure no regressions\n\nThe issue was that the config parser wasn't handling null values correctly.",
+    "tokens_input": 3500,
+    "tokens_output": 2100,
+    "latency_ms": 8500.0
+  },
+  {
+    "timestamp": "2026-01-15T10:40:00Z",
+    "model": "claude-3-5-haiku-20241022",
+    "prompt_hash": "jkl012",
+    "response_text": "All tests passed! ✓\n- Unit tests: 45 passed\n- Integration tests: 12 passed\n- E2E tests: 8 passed\n\nNo failures detected. The fix is working correctly.",
+    "tokens_input": 800,
+    "tokens_output": 120,
+    "latency_ms": 650.0
+  }
+]

@@ -79,7 +79,12 @@ async def lifespan(app: FastAPI):
     state.audit = AuditTrail(audit_dir)
     state.auth_token = config.ensure_auth_token()
 
-    haiku, sonnet, opus, usage = build_agents(config)
+    # Option 2: Support mock mode for testing (LOCAL_MANAGER_MOCK_MODE=true)
+    mock_mode = config.get_raw("LOCAL_MANAGER_MOCK_MODE", "false").lower() == "true"
+    if mock_mode:
+        logger.info("⚠️  MOCK MODE ENABLED — Using recorded responses, no API calls")
+
+    haiku, sonnet, opus, usage = build_agents(config, mock_mode=mock_mode)
     state.haiku, state.sonnet, state.opus, state.usage = haiku, sonnet, opus, usage
     state.conversation = ConversationManager(config, state.db, state.audit, haiku)
 
@@ -99,6 +104,7 @@ async def lifespan(app: FastAPI):
     state.provisioner = NewAppProvisioner(config, state.db, state.audit)
     # Optimization 1: Reuse cached agents instead of rebuilding per session
     def get_cached_agents():
+        # In mock mode, agents are already created; just return them
         return state.haiku, state.sonnet, state.opus, state.usage
 
     state.orchestrator = Orchestrator(
