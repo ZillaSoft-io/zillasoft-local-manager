@@ -6,12 +6,14 @@ Replaces run_dry_run with orchestrator that includes:
 - Parallel execution when tasks are independent
 - Cost tracking per agent per cycle
 - Structured logging with context
+- Agent fallback chains for resilience
 """
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
 
+from ..agent_fallback import get_fallback_chain
 from ..cache import SessionCache
 from ..cost.breakdown import CycleBreakdown
 from .haiku import HaikuAgent, ValidationVerdict
@@ -119,19 +121,55 @@ def run_phase2_orchestration(
         result.plan = plan
 
         # Phase 2: Dry-run validation (Haiku checks against intent)
+        # Resilience: use fallback chains for validation and revision
+        fallback = get_fallback_chain()
         verdicts: list[ValidationVerdict] = []
         approved = False
         rounds = 0
 
         for rounds in range(1, max_rounds + 1):
-            verdict = haiku.validate_dry_run_plan(original_intent, plan)
+            # Validation with fallback (Haiku → Sonnet → Opus)
+            validation_calls = {
+                "haiku": lambda: haiku.validate_dry_run_plan(original_intent, plan),
+                "sonnet": lambda: sonnet.validate_dry_run_plan(original_intent, plan),
+                "opus": lambda: opus.validate_dry_run_plan(original_intent, plan),
+            }
+
+            try:
+                verdict, validation_agent = fallback.execute_with_fallback(
+                    "plan_validation", validation_calls
+                )
+                if validation_agent != "haiku":
+                    logger.warning(f"Plan validation degraded: using {validation_agent} instead of haiku")
+            except RuntimeError as e:
+                logger.error(f"All agents failed for plan validation: {e}")
+                result.error = f"Plan validation failed: {e}"
+                return result
+
             verdicts.append(verdict)
             if verdict.approved:
                 approved = True
                 logger.info("Plan approved on round %d.", rounds)
                 break
             logger.info("Plan rejected (round %d): %s", rounds, verdict.corrections)
-            plan = sonnet.revise_dry_run_plan(context, plan, verdict.corrections)
+
+            # Plan revision with fallback (Sonnet → Haiku → Opus)
+            revision_calls = {
+                "sonnet": lambda: sonnet.revise_dry_run_plan(context, plan, verdict.corrections),
+                "haiku": lambda: haiku.revise_dry_run_plan(context, plan, verdict.corrections),
+                "opus": lambda: opus.revise_dry_run_plan(context, plan, verdict.corrections),
+            }
+
+            try:
+                plan, revision_agent = fallback.execute_with_fallback(
+                    "plan_generation", revision_calls
+                )
+                if revision_agent != "sonnet":
+                    logger.warning(f"Plan revision degraded: using {revision_agent} instead of sonnet")
+            except RuntimeError as e:
+                logger.error(f"All agents failed for plan revision: {e}")
+                result.error = f"Plan revision failed: {e}"
+                return result
 
         result.approved = approved
         result.rounds = rounds
@@ -148,7 +186,23 @@ def run_phase2_orchestration(
         result.routing_decision = agent
 
         # Phase 4: Generate instructions for implementation
-        instructions = sonnet.generate_instructions(context, plan)
+        # Resilience: use fallback chain for instruction generation (Sonnet → Haiku → Opus)
+        instruction_calls = {
+            "sonnet": lambda: sonnet.generate_instructions(context, plan),
+            "haiku": lambda: haiku.generate_instructions(context, plan),
+            "opus": lambda: opus.generate_instructions(context, plan),
+        }
+
+        try:
+            instructions, instruction_agent = fallback.execute_with_fallback(
+                "plan_generation", instruction_calls
+            )
+            if instruction_agent != "sonnet":
+                logger.warning(f"Instruction generation degraded: using {instruction_agent} instead of sonnet")
+        except RuntimeError as e:
+            logger.error(f"All agents failed for instruction generation: {e}")
+            result.error = f"Instruction generation failed: {e}"
+            return result
 
         # Phase 5: Execute (route to Haiku or Opus)
         implementation = orchestrator.execution_phase(agent, instructions)

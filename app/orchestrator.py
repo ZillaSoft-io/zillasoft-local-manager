@@ -28,6 +28,7 @@ from typing import Callable, Optional
 
 from .agents.phase2_orchestration import run_phase2_orchestration
 from .agents.ml_routing import get_ml_router
+from .agent_fallback import get_fallback_chain
 from .cache import SessionCache
 from .change_complexity import get_change_analyzer
 from .cost import record_session_cost
@@ -170,12 +171,31 @@ class Orchestrator:
             if self._controller.should_stop(session_id):
                 return self._on_stop(session_id, project, tracker, repo_path)
 
-            try:
-                opus_result = opus.implement_with_tools(
+            # Resilience: use fallback chain for implementation (in case Opus is down)
+            fallback = get_fallback_chain()
+            impl_calls = {
+                "opus": lambda: opus.implement_with_tools(
                     instructions, repo_path=repo_path, executor=self._executor,
-                    session_id=session_id, controller=self._controller)
+                    session_id=session_id, controller=self._controller),
+                "sonnet": lambda: sonnet.implement_with_tools(
+                    instructions, repo_path=repo_path, executor=self._executor,
+                    session_id=session_id, controller=self._controller),
+                "haiku": lambda: haiku.implement_with_tools(
+                    instructions, repo_path=repo_path, executor=self._executor,
+                    session_id=session_id, controller=self._controller),
+            }
+
+            try:
+                opus_result, impl_agent = fallback.execute_with_fallback(
+                    "implementation", impl_calls
+                )
+                if impl_agent != "opus":
+                    logger.warning(f"Implementation degraded: using {impl_agent} instead of opus")
             except CommandStopped:
                 opus_result = None
+            except RuntimeError as e:
+                logger.error(f"All agents failed for implementation: {e}")
+                raise
 
             if opus_result is None or opus_result.stopped:
                 if self._controller.should_pause(session_id):
@@ -233,14 +253,33 @@ class Orchestrator:
                     "passed": test_result.ok
                 }
 
-                # Only Sonnet/Opus support thinking budget; Haiku does not
-                if review_agent_name in ("sonnet", "opus"):
-                    review_kwargs["thinking_budget_tokens"] = effort_config["thinking_budget_tokens"]
+                # Resilience: use fallback chain for test review (in case primary agent is down)
+                fallback = get_fallback_chain()
+                agent_calls = {
+                    "haiku": lambda: haiku.review_after_tests(**review_kwargs),
+                    "sonnet": lambda: (
+                        sonnet.review_after_tests(
+                            **{**review_kwargs,
+                               "thinking_budget_tokens": effort_config["thinking_budget_tokens"]}
+                        ) if effort_config.get("thinking_budget_tokens") else
+                        sonnet.review_after_tests(**review_kwargs)
+                    ),
+                    "opus": lambda: (
+                        opus.review_after_tests(
+                            **{**review_kwargs,
+                               "thinking_budget_tokens": effort_config["thinking_budget_tokens"]}
+                        ) if effort_config.get("thinking_budget_tokens") else
+                        opus.review_after_tests(**review_kwargs)
+                    ),
+                }
 
-                review = review_agent.review_after_tests(**review_kwargs)
-
-                # Track which agents ran and reviewed tests, and effort levels used
-                review_agent_name = "haiku" if review_agent == haiku else "sonnet"
+                try:
+                    review, review_agent_name = fallback.execute_with_fallback(
+                        "test_review", agent_calls
+                    )
+                except RuntimeError as e:
+                    logger.error(f"All agents failed for test review: {e}")
+                    raise
                 logger.info(
                     f"Tests run by {test_runner_name}, "
                     f"reviewed by {review_agent_name} ({review_effort.value} effort)"
@@ -317,8 +356,27 @@ class Orchestrator:
                 else:
                     # Regenerate from scratch (full analysis + reimplementation)
                     logger.info(f"Cycle {cycle}: Smart retry — regenerating from scratch")
-                    instructions = sonnet.bug_from_failure(
-                        instructions=instructions, test_output=test_result.tail())
+
+                    # Resilience: use fallback chain for bug analysis (in case Sonnet is down)
+                    fallback = get_fallback_chain()
+                    bug_calls = {
+                        "sonnet": lambda: sonnet.bug_from_failure(
+                            instructions=instructions, test_output=test_result.tail()),
+                        "opus": lambda: opus.bug_from_failure(
+                            instructions=instructions, test_output=test_result.tail()),
+                        "haiku": lambda: haiku.bug_from_failure(
+                            instructions=instructions, test_output=test_result.tail()),
+                    }
+
+                    try:
+                        instructions, bug_agent = fallback.execute_with_fallback(
+                            "bug_analysis", bug_calls
+                        )
+                        if bug_agent != "sonnet":
+                            logger.warning(f"Bug analysis degraded: using {bug_agent} instead of sonnet")
+                    except RuntimeError as e:
+                        logger.error(f"All agents failed for bug analysis: {e}")
+                        raise
 
             except Exception as e:
                 # Crash during cycle: save error checkpoint and escalate

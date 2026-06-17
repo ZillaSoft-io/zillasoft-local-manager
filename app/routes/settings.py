@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from .. import main as _main
+from ..agent_fallback import get_fallback_chain
 from ..agents.ml_routing import get_ml_router
 from ..agents.registry import get_registry
 from ..cost.budgeting import BudgetManager
@@ -320,4 +321,41 @@ async def get_session_recovery_details(session_id: str) -> dict[str, Any]:
     return {
         "ok": True,
         "recovery": details,
+    }
+
+
+# ============================================================================
+# Agent resilience endpoints
+# ============================================================================
+
+@router.get("/agents/health")
+async def get_agent_health() -> dict[str, Any]:
+    """Get health status of all agents (for resilience monitoring)."""
+    fallback = get_fallback_chain()
+    health = fallback.get_health_summary()
+
+    return {
+        "agents": health,
+        "fallback_chains": fallback.FALLBACK_CHAINS,
+    }
+
+
+@router.post("/agents/health/reset/{agent_name}")
+async def reset_agent_health(agent_name: str) -> dict[str, Any]:
+    """Manually reset health status for an agent (ops only)."""
+    fallback = get_fallback_chain()
+
+    if agent_name not in ["haiku", "sonnet", "opus"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid agent name. Must be: haiku, sonnet, or opus"
+        )
+
+    fallback.reset_health(agent_name)
+    logger.info(f"Reset health for agent {agent_name}")
+
+    return {
+        "ok": True,
+        "agent": agent_name,
+        "health": fallback.get_health_summary()[agent_name],
     }
