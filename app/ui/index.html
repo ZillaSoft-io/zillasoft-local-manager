@@ -440,9 +440,25 @@ async function saveFeedback(){
 async function loadMonitorTab(el){
   const mon = await api('/api/settings/monitoring');
   let clStatus = {last_update: 'never', ready: false};
+  let agentHealth = {agents: {}};
   try{ clStatus = await api('/api/changelog/status'); }catch(e){}
+  try{ agentHealth = await api('/api/settings/agents/health'); }catch(e){}
+
+  // UI 2 & 3: Format agent health status with badges
+  const agentBadges = Object.entries(agentHealth.agents || {}).map(([name, h]) => `
+    <div style="padding:8px;border-radius:6px;background:${h.is_degraded?'#5a2a2a':'#235'};border:1px solid ${h.is_degraded?'var(--red)':'var(--green)'};margin-bottom:8px">
+      <p style="margin:0;font-size:12px"><b>${name}</b> ${h.status}</p>
+      <p style="margin:4px 0 0;font-size:11px;color:var(--muted)">${h.details}</p>
+    </div>
+  `).join('');
 
   el.innerHTML = `
+    <div class="card">
+      <h3>Agent Health</h3>
+      <p class="muted" style="font-size:12px">Real-time status of Claude models. Degraded agents use fallback chains.</p>
+      ${agentBadges}
+    </div>
+
     <div class="card">
       <h3>Cost & Performance</h3>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">

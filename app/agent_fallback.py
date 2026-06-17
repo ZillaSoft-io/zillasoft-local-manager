@@ -2,10 +2,17 @@
 
 If a model fails (503, timeout, API error), automatically try fallback agents
 in priority order. Tracks model health to avoid thrashing on consistently-down models.
+
+Stability features:
+- Rate limit (429) detection with exponential backoff
+- Automatic retry with jittered backoff
+- Request timeout enforcement
 """
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
@@ -22,6 +29,8 @@ class ModelHealth:
     is_degraded: bool = False
     degraded_at: Optional[datetime] = None
     recovery_attempted_at: Optional[datetime] = None
+    rate_limit_backoff_until: Optional[datetime] = None  # Stability 2: rate limit backoff
+    rate_limit_backoff_seconds: int = 1  # Initial backoff, doubles on each 429
 
     def record_failure(self) -> None:
         """Record a failure."""
@@ -40,8 +49,38 @@ class ModelHealth:
         self.is_degraded = False
         self.last_failure_time = None
 
+    def record_rate_limit(self) -> None:
+        """Record a rate limit (429) error and back off exponentially."""
+        now = datetime.now(timezone.utc)
+        # Jitter backoff to prevent thundering herd
+        jitter = random.uniform(0.8, 1.2)
+        backoff = max(1, int(self.rate_limit_backoff_seconds * jitter))
+        self.rate_limit_backoff_until = now + timedelta(seconds=backoff)
+        # Double backoff for next 429 (up to 60s max)
+        self.rate_limit_backoff_seconds = min(60, self.rate_limit_backoff_seconds * 2)
+        logger.warning(
+            f"Model {self.model_name} rate limited. Backing off {backoff}s "
+            f"(next backoff will be ~{min(60, self.rate_limit_backoff_seconds)}s)"
+        )
+
+    def is_rate_limited(self) -> bool:
+        """Check if model is currently in rate limit backoff."""
+        if self.rate_limit_backoff_until is None:
+            return False
+        if datetime.now(timezone.utc) > self.rate_limit_backoff_until:
+            # Backoff expired, reset
+            self.rate_limit_backoff_until = None
+            self.rate_limit_backoff_seconds = 1
+            logger.info(f"Model {self.model_name} rate limit backoff expired, retrying")
+            return False
+        return True
+
     def should_try(self) -> bool:
-        """Should we attempt this model, or skip it due to degradation?"""
+        """Should we attempt this model, or skip it due to degradation/rate limit?"""
+        # Check rate limit first (takes priority)
+        if self.is_rate_limited():
+            return False
+
         if not self.is_degraded:
             return True
 
@@ -125,6 +164,10 @@ class AgentFallbackChain:
                     keyword in str(e).lower()
                     for keyword in ["timeout", "429", "503", "connection", "overloaded"]
                 )
+
+                # Stability 2: Detect rate limits (429) and apply backoff
+                if "429" in str(e) or "rate limit" in str(e).lower():
+                    health.record_rate_limit()
 
                 log_level = logging.WARNING if is_transient else logging.ERROR
                 logger.log(

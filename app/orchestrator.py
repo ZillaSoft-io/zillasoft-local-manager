@@ -35,6 +35,7 @@ from .cost import record_session_cost
 from .cost.budgeting import BudgetManager
 from .cost_estimation import get_cost_estimator
 from .crash_recovery import get_crash_recovery
+from .cycle_timeline import get_session_timelines, cleanup_session_timeline
 from .effort_routing import get_effort_router, EffortLevel
 from .escalation_messages import build_escalation_reason
 from .execution import run_tests
@@ -163,8 +164,12 @@ class Orchestrator:
 
         # ---- cycle loop with crash recovery ----
         recovery = get_crash_recovery()
+        # UI 4: Track cycle timeline for transparency
+        timelines = get_session_timelines(session_id)
 
         for cycle in range(1, max_cycles + 1):
+            # Start cycle timeline
+            cycle_timeline = timelines.start_cycle(cycle)
             if self._controller.should_pause(session_id):
                 return self._on_pause(session_id, project, tracker, cycle,
                                       instructions)
@@ -185,12 +190,19 @@ class Orchestrator:
                     session_id=session_id, controller=self._controller),
             }
 
+            # UI 4: Track implementation timing
+            impl_step = cycle_timeline.add_step("implementation", "opus")
+
             try:
                 opus_result, impl_agent = fallback.execute_with_fallback(
                     "implementation", impl_calls
                 )
+                impl_step.agent = impl_agent
+                impl_step.complete()
                 if impl_agent != "opus":
                     logger.warning(f"Implementation degraded: using {impl_agent} instead of opus")
+                    # UI 3: Fallback notification (logged for UI display)
+                    logger.info(f"FALLBACK: Implementation used {impl_agent} (primary opus unavailable)")
             except CommandStopped:
                 opus_result = None
             except RuntimeError as e:
@@ -222,7 +234,10 @@ class Orchestrator:
 
                 # The final test run is short — not cancellable (the cancellable
                 # unit is Opus's bash loop, checked above and between its steps).
+                # UI 4: Track test timing
+                test_step = cycle_timeline.add_step("test_run", test_runner_name)
                 test_result = run_tests(self._executor, repo_path, test_command)
+                test_step.complete()
 
                 # Checkpoint after tests
                 recovery.save_checkpoint(
@@ -254,6 +269,8 @@ class Orchestrator:
                 }
 
                 # Resilience: use fallback chain for test review (in case primary agent is down)
+                # UI 4: Track review timing
+                review_step = cycle_timeline.add_step("test_review", "haiku")
                 fallback = get_fallback_chain()
                 agent_calls = {
                     "haiku": lambda: haiku.review_after_tests(**review_kwargs),
@@ -277,6 +294,11 @@ class Orchestrator:
                     review, review_agent_name = fallback.execute_with_fallback(
                         "test_review", agent_calls
                     )
+                    review_step.agent = review_agent_name
+                    review_step.complete()
+                    if review_agent_name != "haiku":
+                        # UI 3: Fallback notification
+                        logger.info(f"FALLBACK: Test review used {review_agent_name} (primary haiku unavailable)")
                 except RuntimeError as e:
                     logger.error(f"All agents failed for test review: {e}")
                     raise
@@ -320,10 +342,16 @@ class Orchestrator:
                         "passed": test_result.ok
                     })
 
+                # Complete cycle timeline
+                cycle_timeline.complete()
+                logger.info(cycle_timeline.format_summary())
+
                 # Clean up checkpoints for completed cycle
                 recovery.cleanup_cycle_checkpoints(session_id, cycle)
 
                 if test_result.ok:
+                    # Cleanup timeline when session is done
+                    cleanup_session_timeline(session_id)
                     return self._finish(session, project, tracker, cycle)
 
                 # Failure -> record for feedback loop

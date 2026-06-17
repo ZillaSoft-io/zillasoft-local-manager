@@ -39,10 +39,12 @@ class AnthropicClient:
     """Thin, capability-aware wrapper over `anthropic.Anthropic`."""
 
     def __init__(self, config, sdk_client: Any = None,
-                 usage_tracker: Optional[UsageTracker] = None):
+                 usage_tracker: Optional[UsageTracker] = None,
+                 request_timeout: int = 120):
         self._config = config
         self._sdk = sdk_client          # injected (tests) or lazily built
         self.usage = usage_tracker or UsageTracker()
+        self.request_timeout = request_timeout  # Stability 1: explicit timeout on all requests
 
     # ------------------------------------------------------------------ #
     # SDK client
@@ -51,7 +53,12 @@ class AnthropicClient:
         if self._sdk is None:
             import anthropic  # imported lazily so the package loads without a key
             api_key = self._config.require("ANTHROPIC_API_KEY")
-            self._sdk = anthropic.Anthropic(api_key=api_key, max_retries=3)
+            # Stability 1: Set timeout on client + retry on transient failures
+            self._sdk = anthropic.Anthropic(
+                api_key=api_key,
+                max_retries=3,
+                timeout=self.request_timeout
+            )
         return self._sdk
 
     # ------------------------------------------------------------------ #

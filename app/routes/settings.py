@@ -16,6 +16,7 @@ from ..agent_fallback import get_fallback_chain
 from ..agents.ml_routing import get_ml_router
 from ..agents.registry import get_registry
 from ..cost.budgeting import BudgetManager
+from ..cycle_timeline import get_session_timelines
 from ..feedback_loop import get_feedback_loop
 from ..observability import get_observability
 from ..session_recovery import SessionRecoveryManager
@@ -334,8 +335,29 @@ async def get_agent_health() -> dict[str, Any]:
     fallback = get_fallback_chain()
     health = fallback.get_health_summary()
 
+    # UI 2: Add human-readable status
+    ui_status = {}
+    for agent_name, h in fallback.health.items():
+        if h.is_degraded:
+            status = "⚠️ degraded"
+            details = f"{h.consecutive_failures} failures"
+        elif h.consecutive_failures > 0:
+            status = "⚠️ warn"
+            details = f"{h.consecutive_failures} recent failures"
+        else:
+            status = "✓ healthy"
+            details = "all checks passing"
+
+        ui_status[agent_name] = {
+            "status": status,
+            "details": details,
+            "failures": h.consecutive_failures,
+            "is_degraded": h.is_degraded,
+            "last_failure": h.last_failure_time.isoformat() if h.last_failure_time else None,
+        }
+
     return {
-        "agents": health,
+        "agents": ui_status,
         "fallback_chains": fallback.FALLBACK_CHAINS,
     }
 
@@ -358,4 +380,40 @@ async def reset_agent_health(agent_name: str) -> dict[str, Any]:
         "ok": True,
         "agent": agent_name,
         "health": fallback.get_health_summary()[agent_name],
+    }
+
+
+# ============================================================================
+# UI 4: Cycle timeline and UI 5: Cost breakdown
+# ============================================================================
+
+@router.get("/sessions/{session_id}/timeline")
+async def get_session_timeline(session_id: str) -> dict[str, Any]:
+    """Get cycle timeline for a session (UI 4: timing breakdown)."""
+    timelines = get_session_timelines(session_id)
+    summary = timelines.get_summary()
+
+    return {
+        "ok": True,
+        "timeline": summary,
+    }
+
+
+@router.get("/sessions/{session_id}/cost-breakdown")
+async def get_session_cost_breakdown(session_id: str) -> dict[str, Any]:
+    """Get detailed cost breakdown for a session (UI 5: cost transparency)."""
+    session = _main.state.db.get_session(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    cost_breakdown = session.get("cost_breakdown", {})
+    total_cost = session.get("total_cost", 0)
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "total_cost": round(total_cost, 4),
+        "total_tokens": session.get("total_tokens_used", 0),
+        "breakdown": cost_breakdown,
+        "by_phase": cost_breakdown.get("by_phase", {}),
     }

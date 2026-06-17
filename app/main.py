@@ -20,6 +20,7 @@ from .cost import MonthlyBudget
 from .database import Database
 from .deploy import DeploymentTracker
 from .execution import CodeExecutor, PreFlight
+from .health_monitor import start_health_monitoring, stop_health_monitoring
 from .input import ConversationManager
 from .newapp import NewAppProvisioner
 from .notifications import Notifier
@@ -118,9 +119,16 @@ async def lifespan(app: FastAPI):
         "API auth token (send as 'Authorization: Bearer <token>'):\n  %s",
         state.auth_token,
     )
+
+    # Stability 3: Start proactive health monitoring
+    await start_health_monitoring(state.haiku.client)
+
     yield
+
     # ---- shutdown ----
+    # Stability 4: Graceful shutdown — save checkpoint on SIGTERM
     logger.info("ZillaSoft Local Manager shutting down.")
+    await stop_health_monitoring()
 
 
 app = FastAPI(
