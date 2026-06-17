@@ -22,14 +22,15 @@ class ChangelogUpdater:
     def __init__(self, projects: dict[str, str], website_repo: str, haiku_agent=None):
         """
         Args:
-            projects: dict of {project_name: repo_path}
+            projects: dict of {project_name: repo_path} (only public-facing: Snipzilla, Website, Stashzilla)
             website_repo: path to zillasoft.io website repo
             haiku_agent: Haiku agent for summarization (optional)
         """
-        self.projects = projects
+        self.projects = {k: v for k, v in projects.items() if k != "Local Manager"}
         self.website_repo = Path(website_repo)
         self.haiku = haiku_agent
         self.state_file = Path(".last_changelog_update.json")
+        self.changelog_file = self.website_repo / "src" / "pages" / "changelog.astro"
 
     def _load_state(self) -> dict:
         """Load last update timestamp."""
@@ -186,8 +187,82 @@ Changelog entry (1-2 sentences):"""
 
         return "\n\n".join(lines) if lines else None
 
+    def _read_changelog_file(self) -> tuple[str, str, str]:
+        """Read changelog.astro file, return (before_entries, entries_array, after_entries)."""
+        with open(self.changelog_file, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        # Find the const entries array
+        start_marker = "const entries: ChangelogEntry[] = ["
+        end_marker = "];"
+
+        start_idx = content.find(start_marker)
+        end_idx = content.find(end_marker, start_idx)
+
+        if start_idx == -1 or end_idx == -1:
+            raise ValueError("Could not find entries array in changelog.astro")
+
+        before = content[:start_idx + len(start_marker)]
+        entries_text = content[start_idx + len(start_marker):end_idx]
+        after = content[end_idx:]
+
+        return before, entries_text, after
+
+    def _generate_astro_entry(self, project_commits: dict[str, list[dict]]) -> str:
+        """Generate an Astro changelog entry object."""
+        from datetime import datetime
+        today = datetime.now(timezone.utc).date()
+        categories = self._categorize_commits(self._flatten_commits(project_commits))
+
+        # Build arrays for added, changed, fixed
+        added_items = []
+        if categories["announcements"]:
+            summary = self._summarize_with_haiku(categories["announcements"])
+            if summary:
+                added_items.append(f'      "{summary}",')
+        if categories["features"]:
+            summary = self._summarize_with_haiku(categories["features"])
+            if summary:
+                added_items.append(f'      "{summary}",')
+
+        changed_items = []
+        if categories["improvements"]:
+            summary = self._summarize_with_haiku(categories["improvements"])
+            if summary:
+                changed_items.append(f'      "{summary}",')
+
+        fixed_items = []
+        if categories["bugs"]:
+            summary = self._summarize_with_haiku(categories["bugs"])
+            if summary:
+                fixed_items.append(f'      "{summary}",')
+
+        # Generate entry object
+        entry = f"""  {{
+    version: "auto-{today.strftime('%Y%m%d')}",
+    date: "{today.strftime('%B %d, %Y')}",
+    product: "ZillaSoft",
+    title: "{today.strftime('%B %d')} Updates","""
+
+        if added_items:
+            entry += "\n    added: [\n" + "\n".join(added_items) + "\n    ],"
+        if changed_items:
+            entry += "\n    changed: [\n" + "\n".join(changed_items) + "\n    ],"
+        if fixed_items:
+            entry += "\n    fixed: [\n" + "\n".join(fixed_items) + "\n    ],"
+
+        entry += "\n  },"
+        return entry
+
+    def _flatten_commits(self, project_commits: dict[str, list[dict]]) -> list[dict]:
+        """Flatten commits from all projects into one list."""
+        all_commits = []
+        for commits in project_commits.values():
+            all_commits.extend(commits)
+        return all_commits
+
     def update_changelog(self) -> bool:
-        """Scan all projects, summarize, and post to website changelog."""
+        """Scan all projects, summarize, and add to website changelog.astro."""
         if not self.should_update():
             logger.info("Changelog updated recently, skipping")
             return False
@@ -198,7 +273,7 @@ Changelog entry (1-2 sentences):"""
         state = self._load_state()
         last_update = state.get("last_update")
 
-        # Collect commits from all projects
+        # Collect commits from all projects (excluding Local Manager)
         project_commits = {}
         for project_name, repo_path in self.projects.items():
             commits = self._get_commits_since(repo_path, last_update)
@@ -210,37 +285,31 @@ Changelog entry (1-2 sentences):"""
             logger.info("No new commits found")
             return False
 
-        # Generate entry
-        entry = self.get_daily_changelog_entry(project_commits)
-        if not entry:
-            logger.warning("Failed to generate changelog entry")
-            return False
-
-        # Create markdown file for Astro
-        today = datetime.now(timezone.utc).date()
-        filename = f"{today}.md"  # Astro will use this for slug
-        filepath = self.website_repo / "src" / "content" / "blog" / filename
-
-        frontmatter = f"""---
-title: "{today.strftime('%B %d, %Y')} Updates"
-description: "Daily changelog for ZillaSoft products"
-pubDate: "{today.isoformat()}T00:00:00Z"
----
-
-{entry}
-"""
-
         try:
-            filepath.parent.mkdir(parents=True, exist_ok=True)
-            with open(filepath, "w") as f:
-                f.write(frontmatter)
-            logger.info(f"Created changelog entry: {filepath}")
+            # Generate entry
+            entry_obj = self._generate_astro_entry(project_commits)
+            if not entry_obj:
+                logger.warning("Failed to generate changelog entry")
+                return False
+
+            # Read current changelog
+            before, entries_text, after = self._read_changelog_file()
+
+            # Insert new entry at the top
+            new_entries = entry_obj + "\n" + entries_text
+
+            # Write updated file
+            new_content = before + new_entries + after
+            with open(self.changelog_file, "w", encoding="utf-8") as f:
+                f.write(new_content)
+            logger.info(f"Updated changelog.astro with new entry")
 
             # Commit to website repo
             subprocess.run(
-                ["git", "-C", str(self.website_repo), "add", str(filepath)],
+                ["git", "-C", str(self.website_repo), "add", str(self.changelog_file)],
                 check=True, capture_output=True
             )
+            today = datetime.now(timezone.utc).date()
             subprocess.run(
                 ["git", "-C", str(self.website_repo), "commit",
                  "-m", f"Changelog: {today.strftime('%B %d')} updates"],
