@@ -229,3 +229,8 @@ app.include_router(deploy_router)
 app.include_router(config_router)
 app.include_router(settings_router)
 app.include_router(changelog_router)
+
+if __name__ == "__main__":
+    import uvicorn
+    print("[STARTUP] Starting uvicorn server...")
+    uvicorn.run(app, host="localhost", port=5555)
