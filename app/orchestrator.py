@@ -32,6 +32,7 @@ from .cache import SessionCache
 from .change_complexity import get_change_analyzer
 from .cost import record_session_cost
 from .cost.budgeting import BudgetManager
+from .crash_recovery import get_crash_recovery
 from .effort_routing import get_effort_router, EffortLevel
 from .execution import run_tests
 from .execution.executor import CommandStopped
@@ -145,7 +146,9 @@ class Orchestrator:
             # For Haiku-routed simple tasks, treat as complete
             return self._finish(session, project, tracker, cycle=0)
 
-        # ---- cycle loop ----
+        # ---- cycle loop with crash recovery ----
+        recovery = get_crash_recovery()
+
         for cycle in range(1, max_cycles + 1):
             if self._controller.should_pause(session_id):
                 return self._on_pause(session_id, project, tracker, cycle,
@@ -169,102 +172,145 @@ class Orchestrator:
             opus_summary = sonnet.summarize_opus_output(
                 opus_result.text or "(no summary provided)")
 
-            # Intelligent test routing: analyze what changed to decide who runs tests
-            change_analyzer = get_change_analyzer()
-            diff = change_analyzer.get_diff(repo_path, opus_result.last_commit_sha)
-            test_runner = change_analyzer.get_test_runner(diff, haiku, sonnet)
-            test_runner_name = "haiku" if test_runner == haiku else "sonnet"
+            try:
+                # Checkpoint before critical operations
+                recovery.save_checkpoint(
+                    session_id, cycle, "pre_test",
+                    {"opus_summary": opus_summary,
+                     "opus_commit": opus_result.last_commit_sha}
+                )
 
-            # The final test run is short — not cancellable (the cancellable
-            # unit is Opus's bash loop, checked above and between its steps).
-            test_result = run_tests(self._executor, repo_path, test_command)
+                # Intelligent test routing: analyze what changed to decide who runs tests
+                change_analyzer = get_change_analyzer()
+                diff = change_analyzer.get_diff(repo_path, opus_result.last_commit_sha)
+                test_runner = change_analyzer.get_test_runner(diff, haiku, sonnet)
+                test_runner_name = "haiku" if test_runner == haiku else "sonnet"
 
-            # Intelligent review routing: analyze test results to decide who reviews
-            test_analyzer = get_test_analyzer()
-            review_agent = test_analyzer.get_routed_agent(
-                test_result.tail() or "", test_result.ok, haiku, sonnet)
+                # The final test run is short — not cancellable (the cancellable
+                # unit is Opus's bash loop, checked above and between its steps).
+                test_result = run_tests(self._executor, repo_path, test_command)
 
-            # Intelligent effort routing: control thinking depth based on complexity
-            # (only for Sonnet/Opus, Haiku does not support extended thinking)
-            effort_router = get_effort_router()
-            review_effort = effort_router.analyze_task_complexity(
-                task_type="test_review",
-                has_failures=not test_result.ok,
-                change_complexity="simple" if test_runner_name == "haiku" else "complex"
-            )
-            effort_config = effort_router.get_effort_config(review_effort)
+                # Checkpoint after tests
+                recovery.save_checkpoint(
+                    session_id, cycle, "post_test",
+                    {"test_passed": test_result.ok,
+                     "test_summary": test_result.summary}
+                )
 
-            # Build kwargs for review call
-            review_kwargs = {
-                "opus_summary": opus_summary,
-                "test_summary": test_result.summary,
-                "passed": test_result.ok
-            }
+                # Intelligent review routing: analyze test results to decide who reviews
+                test_analyzer = get_test_analyzer()
+                review_agent = test_analyzer.get_routed_agent(
+                    test_result.tail() or "", test_result.ok, haiku, sonnet)
 
-            # Only Sonnet/Opus support thinking budget; Haiku does not
-            if review_agent_name in ("sonnet", "opus"):
-                review_kwargs["thinking_budget_tokens"] = effort_config["thinking_budget_tokens"]
+                # Intelligent effort routing: control thinking depth based on complexity
+                # (only for Sonnet/Opus, Haiku does not support extended thinking)
+                effort_router = get_effort_router()
+                review_effort = effort_router.analyze_task_complexity(
+                    task_type="test_review",
+                    has_failures=not test_result.ok,
+                    change_complexity="simple" if test_runner_name == "haiku" else "complex"
+                )
+                effort_config = effort_router.get_effort_config(review_effort)
 
-            review = review_agent.review_after_tests(**review_kwargs)
-
-            # Track which agents ran and reviewed tests, and effort levels used
-            review_agent_name = "haiku" if review_agent == haiku else "sonnet"
-            logger.info(
-                f"Tests run by {test_runner_name}, "
-                f"reviewed by {review_agent_name} ({review_effort.value} effort)"
-            )
-
-            self._audit.append_cycle(session_id, project, {
-                "cycle_num": cycle,
-                "opus": {"commands": opus_result.commands,
-                         "steps": opus_result.steps,
-                         "commit_sha": opus_result.last_commit_sha},
-                "testing": {
-                    "runner": test_runner_name,
-                    "reviewer": review_agent_name,
-                    "review_effort": review_effort.value,
-                    "thinking_budget_tokens": effort_config["thinking_budget_tokens"],
-                    "summary": test_result.summary,
-                    "passed": test_result.ok,
-                    "review": review
-                },
-            })
-            self._db.update_session(
-                session_id, cycle_count=cycle,
-                opus_changes={"commands": opus_result.commands,
-                              "commit_sha": opus_result.last_commit_sha},
-                testing={
-                    "runner": test_runner_name,
-                    "reviewer": review_agent_name,
-                    "review_effort": review_effort.value,
-                    "thinking_budget_tokens": effort_config["thinking_budget_tokens"],
-                    "review": review,
+                # Build kwargs for review call
+                review_kwargs = {
+                    "opus_summary": opus_summary,
                     "test_summary": test_result.summary,
                     "passed": test_result.ok
+                }
+
+                # Only Sonnet/Opus support thinking budget; Haiku does not
+                if review_agent_name in ("sonnet", "opus"):
+                    review_kwargs["thinking_budget_tokens"] = effort_config["thinking_budget_tokens"]
+
+                review = review_agent.review_after_tests(**review_kwargs)
+
+                # Track which agents ran and reviewed tests, and effort levels used
+                review_agent_name = "haiku" if review_agent == haiku else "sonnet"
+                logger.info(
+                    f"Tests run by {test_runner_name}, "
+                    f"reviewed by {review_agent_name} ({review_effort.value} effort)"
+                )
+
+                # Checkpoint after review
+                recovery.save_checkpoint(
+                    session_id, cycle, "post_review",
+                    {"review": review}
+                )
+
+                self._audit.append_cycle(session_id, project, {
+                    "cycle_num": cycle,
+                    "opus": {"commands": opus_result.commands,
+                             "steps": opus_result.steps,
+                             "commit_sha": opus_result.last_commit_sha},
+                    "testing": {
+                        "runner": test_runner_name,
+                        "reviewer": review_agent_name,
+                        "review_effort": review_effort.value,
+                        "thinking_budget_tokens": effort_config["thinking_budget_tokens"],
+                        "summary": test_result.summary,
+                        "passed": test_result.ok,
+                        "review": review
+                    },
                 })
+                self._db.update_session(
+                    session_id, cycle_count=cycle,
+                    opus_changes={"commands": opus_result.commands,
+                                  "commit_sha": opus_result.last_commit_sha},
+                    testing={
+                        "runner": test_runner_name,
+                        "reviewer": review_agent_name,
+                        "review_effort": review_effort.value,
+                        "thinking_budget_tokens": effort_config["thinking_budget_tokens"],
+                        "review": review,
+                        "test_summary": test_result.summary,
+                        "passed": test_result.ok
+                    })
 
-            if test_result.ok:
-                return self._finish(session, project, tracker, cycle)
+                # Clean up checkpoints for completed cycle
+                recovery.cleanup_cycle_checkpoints(session_id, cycle)
 
-            # Failure -> record for feedback loop
-            error_msg = test_result.tail()[:200] if test_result.tail() else "Test failed"
-            self._feedback_loop.record_failure(
-                error_msg=error_msg,
-                project=project,
-                agent=session.get("routing_decision", "unknown"),
-                task_type=task_type or "unknown",
-            )
+                if test_result.ok:
+                    return self._finish(session, project, tracker, cycle)
 
-            # Check if we should escalate instead of retrying
-            if self._feedback_loop.should_escalate(error_msg, project, cycle, max_cycles):
+                # Failure -> record for feedback loop
+                error_msg = test_result.tail()[:200] if test_result.tail() else "Test failed"
+                self._feedback_loop.record_failure(
+                    error_msg=error_msg,
+                    project=project,
+                    agent=session.get("routing_decision", "unknown"),
+                    task_type=task_type or "unknown",
+                )
+
+                # Check if we should escalate instead of retrying
+                if self._feedback_loop.should_escalate(error_msg, project, cycle, max_cycles):
+                    return self._escalate(
+                        session_id, project, tracker,
+                        f"Test failed with known pattern (seen before). "
+                        f"Escalating instead of retry #{cycle + 1}.")
+
+                # Failure -> new task for Opus (not a retry).
+                instructions = sonnet.bug_from_failure(
+                    instructions=instructions, test_output=test_result.tail())
+
+            except Exception as e:
+                # Crash during cycle: save error checkpoint and escalate
+                error_str = f"{type(e).__name__}: {str(e)}"
+                logger.exception(f"Cycle {cycle} crashed: {error_str}")
+
+                recovery.save_checkpoint(
+                    session_id, cycle, "post_review",
+                    {"error": error_str},
+                    error=error_str
+                )
+
                 return self._escalate(
                     session_id, project, tracker,
-                    f"Test failed with known pattern (seen before). "
-                    f"Escalating instead of retry #{cycle + 1}.")
+                    f"Cycle {cycle} crashed during execution: {error_str}. "
+                    f"Progress saved to checkpoint — review cycle data and retry.")
 
-            # Failure -> new task for Opus (not a retry).
-            instructions = sonnet.bug_from_failure(
-                instructions=instructions, test_output=test_result.tail())
+        # Clean up all checkpoints for session after completion
+        recovery.cleanup_session_checkpoints(session_id)
 
         return self._escalate(
             session_id, project, tracker,

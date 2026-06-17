@@ -1,0 +1,185 @@
+"""Crash recovery system: save progress at critical points, resume from checkpoints.
+
+Saves state before/after risky operations (test execution, reviews).
+Detects incomplete cycles and allows resumption without losing work.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class Checkpoint:
+    """A saved state at a critical point."""
+    session_id: str
+    cycle_num: int
+    checkpoint_type: str  # "pre_test", "post_test", "post_review"
+    timestamp: str
+    data: dict  # serialized state
+    error: Optional[str] = None  # error message if checkpoint is error state
+
+
+class CrashRecoveryManager:
+    """Manages checkpoints and recovery from crashes."""
+
+    def __init__(self, checkpoint_dir: str | Path = ".checkpoints"):
+        self.checkpoint_dir = Path(checkpoint_dir)
+        self.checkpoint_dir.mkdir(exist_ok=True)
+        logger.debug(f"Crash recovery initialized at {self.checkpoint_dir}")
+
+    def _checkpoint_path(self, session_id: str, cycle_num: int,
+                        checkpoint_type: str) -> Path:
+        """Get path for a checkpoint file."""
+        filename = f"{session_id}_c{cycle_num}_{checkpoint_type}.json"
+        return self.checkpoint_dir / filename
+
+    def save_checkpoint(
+        self,
+        session_id: str,
+        cycle_num: int,
+        checkpoint_type: str,
+        data: dict,
+        error: Optional[str] = None
+    ) -> Path:
+        """Save a checkpoint at a critical point.
+
+        Args:
+            session_id: session identifier
+            cycle_num: cycle number
+            checkpoint_type: "pre_test", "post_test", "post_review"
+            data: state to save (dict)
+            error: error message if this is an error checkpoint
+
+        Returns:
+            Path to checkpoint file
+        """
+        checkpoint = Checkpoint(
+            session_id=session_id,
+            cycle_num=cycle_num,
+            checkpoint_type=checkpoint_type,
+            timestamp=datetime.now(timezone.utc).isoformat(),
+            data=data,
+            error=error
+        )
+
+        path = self._checkpoint_path(session_id, cycle_num, checkpoint_type)
+
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump({
+                    "session_id": checkpoint.session_id,
+                    "cycle_num": checkpoint.cycle_num,
+                    "checkpoint_type": checkpoint.checkpoint_type,
+                    "timestamp": checkpoint.timestamp,
+                    "data": checkpoint.data,
+                    "error": checkpoint.error,
+                }, f, indent=2)
+
+            if error:
+                logger.error(f"Saved ERROR checkpoint: {path} ({error})")
+            else:
+                logger.debug(f"Saved checkpoint: {path}")
+
+            return path
+
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint: {e}")
+            raise
+
+    def load_checkpoint(
+        self, session_id: str, cycle_num: int, checkpoint_type: str
+    ) -> Optional[Checkpoint]:
+        """Load a checkpoint if it exists.
+
+        Returns:
+            Checkpoint or None if not found
+        """
+        path = self._checkpoint_path(session_id, cycle_num, checkpoint_type)
+
+        if not path.exists():
+            return None
+
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            return Checkpoint(
+                session_id=data["session_id"],
+                cycle_num=data["cycle_num"],
+                checkpoint_type=data["checkpoint_type"],
+                timestamp=data["timestamp"],
+                data=data["data"],
+                error=data.get("error"),
+            )
+
+        except Exception as e:
+            logger.warning(f"Failed to load checkpoint {path}: {e}")
+            return None
+
+    def detect_incomplete_cycle(
+        self, session_id: str, cycle_num: int
+    ) -> tuple[bool, Optional[str]]:
+        """Detect if a cycle crashed mid-execution.
+
+        Returns:
+            (is_incomplete, last_checkpoint_type)
+            - is_incomplete: True if cycle didn't complete
+            - last_checkpoint_type: the checkpoint where it stopped ("pre_test", etc.)
+        """
+        # Check in order of execution
+        for checkpoint_type in ["pre_test", "post_test", "post_review"]:
+            checkpoint = self.load_checkpoint(session_id, cycle_num, checkpoint_type)
+            if checkpoint is None:
+                # This checkpoint doesn't exist, so cycle didn't reach here
+                return (True, None if checkpoint_type == "pre_test" else checkpoint_type.replace("post_", ""))
+
+        # All checkpoints exist, cycle is complete
+        return (False, None)
+
+    def cleanup_cycle_checkpoints(self, session_id: str, cycle_num: int) -> None:
+        """Clean up checkpoints for a completed cycle.
+
+        Args:
+            session_id: session identifier
+            cycle_num: cycle number to clean up
+        """
+        for checkpoint_type in ["pre_test", "post_test", "post_review"]:
+            path = self._checkpoint_path(session_id, cycle_num, checkpoint_type)
+            if path.exists():
+                try:
+                    path.unlink()
+                    logger.debug(f"Cleaned up checkpoint: {path}")
+                except Exception as e:
+                    logger.warning(f"Failed to clean checkpoint {path}: {e}")
+
+    def cleanup_session_checkpoints(self, session_id: str) -> None:
+        """Clean up all checkpoints for a session.
+
+        Args:
+            session_id: session identifier
+        """
+        for checkpoint_file in self.checkpoint_dir.glob(f"{session_id}_*.json"):
+            try:
+                checkpoint_file.unlink()
+                logger.debug(f"Cleaned up checkpoint: {checkpoint_file}")
+            except Exception as e:
+                logger.warning(f"Failed to clean checkpoint {checkpoint_file}: {e}")
+
+
+# Global recovery manager
+_recovery: CrashRecoveryManager | None = None
+
+
+def get_crash_recovery() -> CrashRecoveryManager:
+    """Get or create global crash recovery manager."""
+    global _recovery
+    if _recovery is None:
+        _recovery = CrashRecoveryManager()
+    return _recovery
