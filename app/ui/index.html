@@ -437,6 +437,9 @@ async function saveFeedback(){
 
 async function loadMonitorTab(el){
   const mon = await api('/api/settings/monitoring');
+  let clStatus = {last_update: 'never', ready: false};
+  try{ clStatus = await api('/api/changelog/status'); }catch(e){}
+
   el.innerHTML = `
     <div class="card">
       <h3>Cost & Performance</h3>
@@ -456,7 +459,25 @@ async function loadMonitorTab(el){
         <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Cache hit rate: <b>${(mon.cache_hit_rate*100).toFixed(1)}%</b></p>
       </div>
       <p class="muted" style="font-size:12px">Metrics update every 4 seconds.</p>
+    </div>
+
+    <div class="card">
+      <h3>Website Changelog</h3>
+      <p class="muted" style="font-size:12px">Daily digest of all ZillaSoft project updates posted to zillasoft.io/changelog</p>
+      <div style="margin:12px 0;padding:12px;background:var(--surface2);border-radius:8px">
+        <p style="margin:0;font-size:12px">Last update: <b>${clStatus.last_update==='never'?'Never':clStatus.last_update}</b></p>
+        <p style="margin:8px 0 0;font-size:12px;color:${clStatus.ready?'var(--green)':'var(--muted)'}">${clStatus.ready?'✓ Ready for update':'⏱ Updated recently'}  </p>
+      </div>
+      <button class="primary" onclick="triggerChangelogUpdate()" ${!clStatus.ready?'disabled':''}>Update Changelog Now</button>
     </div>`;
+}
+
+async function triggerChangelogUpdate(){
+  try{
+    await api('/api/changelog/update',{method:'POST'});
+    alert('Changelog updated ✓');
+    setTimeout(()=>loadMonitorTab(document.getElementById('tab-content')),1000);
+  }catch(e){ alert('Update failed: '+e.message); }
 }
 
 function closeSettings(){ document.getElementById('settings').classList.remove('show'); }

@@ -200,6 +200,7 @@ from .routes.newapp import router as newapp_router  # noqa: E402
 from .routes.deploy import router as deploy_router  # noqa: E402
 from .routes.config import router as config_router  # noqa: E402
 from .routes.settings import router as settings_router  # noqa: E402
+from .routes.changelog import router as changelog_router  # noqa: E402
 
 app.include_router(input_router)
 app.include_router(control_router)
@@ -209,3 +210,4 @@ app.include_router(newapp_router)
 app.include_router(deploy_router)
 app.include_router(config_router)
 app.include_router(settings_router)
+app.include_router(changelog_router)
