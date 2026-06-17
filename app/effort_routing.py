@@ -99,13 +99,18 @@ class EffortRouter:
         return config
 
     @staticmethod
-    def apply_effort_to_call(agent, prompt: str, effort_level: EffortLevel, **kwargs):
+    def apply_effort_to_call(agent, prompt: str, effort_level: EffortLevel,
+                            agent_name: str = "unknown", **kwargs):
         """Apply effort level to an agent call.
+
+        Only applies thinking budget to models that support it (Sonnet, Opus).
+        Haiku does not support extended thinking.
 
         Args:
             agent: Agent instance
             prompt: prompt text
             effort_level: EffortLevel to use
+            agent_name: name of agent ("haiku", "sonnet", "opus") for capability check
             **kwargs: additional arguments to pass to agent.invoke()
 
         Returns:
@@ -115,12 +120,20 @@ class EffortRouter:
 
         # Merge effort config with kwargs
         call_kwargs = {**kwargs}
-        call_kwargs["thinking_budget_tokens"] = effort_config["thinking_budget_tokens"]
 
-        logger.debug(
-            f"Agent call with {effort_level.value} effort "
-            f"(thinking budget: {effort_config['thinking_budget_tokens']} tokens)"
-        )
+        # Only Sonnet and Opus support extended thinking
+        # Haiku does not support thinking_budget_tokens parameter
+        if agent_name.lower() in ("sonnet", "opus"):
+            call_kwargs["thinking_budget_tokens"] = effort_config["thinking_budget_tokens"]
+            logger.debug(
+                f"{agent_name} call with {effort_level.value} effort "
+                f"(thinking budget: {effort_config['thinking_budget_tokens']} tokens)"
+            )
+        else:
+            logger.debug(
+                f"{agent_name} call with {effort_level.value} effort "
+                f"(no thinking budget — {agent_name} does not support extended thinking)"
+            )
 
         return agent.invoke(prompt, **call_kwargs)
 

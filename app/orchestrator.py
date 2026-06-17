@@ -185,6 +185,7 @@ class Orchestrator:
                 test_result.tail() or "", test_result.ok, haiku, sonnet)
 
             # Intelligent effort routing: control thinking depth based on complexity
+            # (only for Sonnet/Opus, Haiku does not support extended thinking)
             effort_router = get_effort_router()
             review_effort = effort_router.analyze_task_complexity(
                 task_type="test_review",
@@ -193,10 +194,18 @@ class Orchestrator:
             )
             effort_config = effort_router.get_effort_config(review_effort)
 
-            review = review_agent.review_after_tests(
-                opus_summary=opus_summary, test_summary=test_result.summary,
-                passed=test_result.ok,
-                thinking_budget_tokens=effort_config["thinking_budget_tokens"])
+            # Build kwargs for review call
+            review_kwargs = {
+                "opus_summary": opus_summary,
+                "test_summary": test_result.summary,
+                "passed": test_result.ok
+            }
+
+            # Only Sonnet/Opus support thinking budget; Haiku does not
+            if review_agent_name in ("sonnet", "opus"):
+                review_kwargs["thinking_budget_tokens"] = effort_config["thinking_budget_tokens"]
+
+            review = review_agent.review_after_tests(**review_kwargs)
 
             # Track which agents ran and reviewed tests, and effort levels used
             review_agent_name = "haiku" if review_agent == haiku else "sonnet"
