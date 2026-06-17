@@ -19,11 +19,7 @@ from ..errors import AgentError, ConfigValidationError
 
 logger = logging.getLogger(__name__)
 
-# state + auth dependency are attached by main.py to avoid a circular import.
-from .. import main as _main  # noqa: E402
-
-router = APIRouter(prefix="/api/input", tags=["input"],
-                   dependencies=[Depends(_main.require_auth)])
+router = APIRouter(prefix="/api/input", tags=["input"])
 
 _MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # 8 MB
 
@@ -39,8 +35,14 @@ class MessageBody(BaseModel):
     attachments: list[dict] = []
 
 
+def _get_state():
+    """Lazy import to avoid circular dependency."""
+    from .. import main
+    return main.state
+
+
 def _cm():
-    cm = getattr(_main.state, "conversation", None)
+    cm = getattr(_get_state(), "conversation", None)
     if cm is None:
         raise HTTPException(status_code=503, detail="Input handler not ready.")
     return cm

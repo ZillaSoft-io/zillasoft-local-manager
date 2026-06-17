@@ -45,3 +45,10 @@ def make_auth_dependency(config: ConfigHandler):
         return True
 
     return verify_token
+
+
+# Lazy auth dependency — resolves at request time, not import time
+def get_auth_dependency():
+    """Get auth dependency from app state (lazy to avoid circular imports)."""
+    from . import main  # Import inside function to avoid circular dependency
+    return Depends(main.require_auth)
