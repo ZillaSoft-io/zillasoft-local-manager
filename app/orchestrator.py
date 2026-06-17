@@ -29,6 +29,7 @@ from typing import Callable, Optional
 from .agents.phase2_orchestration import run_phase2_orchestration
 from .agents.ml_routing import get_ml_router
 from .cache import SessionCache
+from .change_complexity import get_change_analyzer
 from .cost import record_session_cost
 from .cost.budgeting import BudgetManager
 from .execution import run_tests
@@ -166,37 +167,45 @@ class Orchestrator:
 
             opus_summary = sonnet.summarize_opus_output(
                 opus_result.text or "(no summary provided)")
+
+            # Intelligent test routing: analyze what changed to decide who runs tests
+            change_analyzer = get_change_analyzer()
+            diff = change_analyzer.get_diff(repo_path, opus_result.last_commit_sha)
+            test_runner = change_analyzer.get_test_runner(diff, haiku, sonnet)
+            test_runner_name = "haiku" if test_runner == haiku else "sonnet"
+
             # The final test run is short — not cancellable (the cancellable
             # unit is Opus's bash loop, checked above and between its steps).
             test_result = run_tests(self._executor, repo_path, test_command)
 
-            # Intelligent test routing: use Haiku for simple tests, Sonnet for complex
-            analyzer = get_test_analyzer()
-            review_agent = analyzer.get_routed_agent(
+            # Intelligent review routing: analyze test results to decide who reviews
+            test_analyzer = get_test_analyzer()
+            review_agent = test_analyzer.get_routed_agent(
                 test_result.tail() or "", test_result.ok, haiku, sonnet)
             review = review_agent.review_after_tests(
                 opus_summary=opus_summary, test_summary=test_result.summary,
                 passed=test_result.ok)
 
-            # Track which agent reviewed tests
-            reviewer_agent = "haiku" if review_agent == haiku else "sonnet"
-            logger.info(f"Test review routed to {reviewer_agent}")
+            # Track which agents ran and reviewed tests
+            review_agent_name = "haiku" if review_agent == haiku else "sonnet"
+            logger.info(f"Tests run by {test_runner_name}, reviewed by {review_agent_name}")
 
             self._audit.append_cycle(session_id, project, {
                 "cycle_num": cycle,
                 "opus": {"commands": opus_result.commands,
                          "steps": opus_result.steps,
                          "commit_sha": opus_result.last_commit_sha},
-                "test_review": {"agent": reviewer_agent, "summary": test_result.summary,
-                                "passed": test_result.ok, "review": review},
+                "testing": {"runner": test_runner_name, "reviewer": review_agent_name,
+                            "summary": test_result.summary, "passed": test_result.ok,
+                            "review": review},
             })
             self._db.update_session(
                 session_id, cycle_count=cycle,
                 opus_changes={"commands": opus_result.commands,
                               "commit_sha": opus_result.last_commit_sha},
-                test_review={"agent": reviewer_agent, "review": review,
-                             "test_summary": test_result.summary,
-                             "passed": test_result.ok})
+                testing={"runner": test_runner_name, "reviewer": review_agent_name,
+                         "review": review, "test_summary": test_result.summary,
+                         "passed": test_result.ok})
 
             if test_result.ok:
                 return self._finish(session, project, tracker, cycle)
