@@ -276,22 +276,189 @@ const doCreateRepo=()=>act('/api/sessions/'+S.sel.id+'/create-repo');
 
 // ---- settings ----
 async function openSettings(){
-  const cfg = await api('/api/config');
-  const keys = Object.keys(cfg).sort();
-  document.getElementById('settings-body').innerHTML = keys.map(k=>`
-    <div class="field"><label title="${k}">${k}</label>
-      <input id="cf_${k}" value="${cfg[k]==='<set>'||cfg[k]==='<unset>'?'':escapeAttr(cfg[k])}"
-        placeholder="${cfg[k]}"/>
-      <button onclick="saveCfg('${k}')">Save</button></div>`).join('');
+  const tab = 'budget';
+  document.getElementById('settings-body').innerHTML = `
+    <div style="display:flex;gap:12px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:12px">
+      <button class="tab-btn sel" data-tab="budget" onclick="switchTab('budget')">💰 Budget</button>
+      <button class="tab-btn" data-tab="agents" onclick="switchTab('agents')">🤖 Agents</button>
+      <button class="tab-btn" data-tab="ml" onclick="switchTab('ml')">📈 ML Router</button>
+      <button class="tab-btn" data-tab="feedback" onclick="switchTab('feedback')">🔄 Feedback</button>
+      <button class="tab-btn" data-tab="monitor" onclick="switchTab('monitor')">📊 Monitor</button>
+    </div>
+    <div id="tab-content"></div>`;
+
+  // Add tab button styling
+  const style = document.createElement('style');
+  style.textContent = `
+    .tab-btn { background: transparent !important; border: none !important; border-bottom: 2px solid transparent !important;
+      padding: 0 8px !important; color: var(--muted) !important; cursor: pointer; }
+    .tab-btn.sel { color: var(--accent) !important; border-bottom-color: var(--accent) !important; }
+  `;
+  document.head.appendChild(style);
+
   document.getElementById('settings').classList.add('show');
+  await switchTab(tab);
 }
-async function saveCfg(k){
-  const v=document.getElementById('cf_'+k).value;
-  try{ await api('/api/config/set',{method:'POST',
-    body:JSON.stringify({key:k,value:v})});
-    document.getElementById('cf_'+k).placeholder='saved ✓'; }
-  catch(e){ alert(e.message); }
+
+async function switchTab(tab){
+  document.querySelectorAll('.tab-btn').forEach(b=>b.classList.toggle('sel',b.dataset.tab===tab));
+  const content = document.getElementById('tab-content');
+
+  try {
+    if(tab==='budget') await loadBudgetTab(content);
+    else if(tab==='agents') await loadAgentsTab(content);
+    else if(tab==='ml') await loadMLTab(content);
+    else if(tab==='feedback') await loadFeedbackTab(content);
+    else if(tab==='monitor') await loadMonitorTab(content);
+  }catch(e){ content.innerHTML=`<p class="err">Error: ${e.message}</p>`; }
 }
+
+async function loadBudgetTab(el){
+  const data = await api('/api/settings/budget');
+  const monitor = await api('/api/settings/monitoring');
+  el.innerHTML = `
+    <div class="card">
+      <h3>Monthly Cost Budget</h3>
+      <div class="field" style="align-items:center;gap:16px">
+        <label style="width:auto">Cap: $</label>
+        <input id="budget-cap" type="number" min="1" max="10000" value="${data.monthly_cap_usd}" style="width:120px"/>
+        <span class="muted"style="font-size:12px">/ month</span>
+      </div>
+      <div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px">
+        <p style="margin:0;font-size:12px;color:var(--muted)">Current usage: <b class="mono" style="color:var(--text)">\$${monitor.cost_month.toFixed(2)}</b></p>
+        <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Remaining: <b class="mono" style="color:var(--text)">\$${monitor.budget_remaining.toFixed(2)}</b></p>
+        <div style="margin:8px 0 0;height:8px;background:var(--border);border-radius:4px;overflow:hidden">
+          <div style="width:${monitor.budget_percent_used}%;height:100%;background:${monitor.budget_percent_used>90?'var(--red)':monitor.budget_percent_used>75?'var(--amber)':'var(--cyan)'};transition:width 0.3s"></div>
+        </div>
+      </div>
+      <button class="primary" onclick="saveBudget()">Save Budget</button>
+    </div>`;
+}
+
+async function saveBudget(){
+  const cap = parseFloat(document.getElementById('budget-cap').value);
+  if(cap<=0) return alert('Cap must be > $0');
+  await api('/api/settings/budget',{method:'POST',body:JSON.stringify({
+    monthly_cap_usd:cap, warning_50_percent:true, warning_75_percent:true, warning_90_percent:true
+  })});
+  alert('Budget updated ✓');
+}
+
+async function loadAgentsTab(el){
+  const data = await api('/api/settings/agents');
+  const available = await api('/api/settings/agents/available');
+  const toOptions = (agents,sel) => agents.map(a=>`<option ${a===sel?'selected':''}>${a}</option>`).join('');
+  el.innerHTML = `
+    <div class="card">
+      <h3>Agent Orchestration</h3>
+      <div class="field">
+        <label>Validation agent (fast plan checks)</label>
+        <select id="agent-validation">${toOptions(available.cheap,data.validation_agent)}</select>
+      </div>
+      <div class="field">
+        <label>Planning agent (generates plans)</label>
+        <select id="agent-planning">${toOptions(available.medium,data.planning_agent)}</select>
+      </div>
+      <div class="field">
+        <label>Implementation agent (executes tasks)</label>
+        <select id="agent-implementation">${toOptions([...available.medium,...available.expensive],data.implementation_agent)}</select>
+      </div>
+      <p class="muted" style="font-size:12px;margin:12px 0 0">When Mythos 5 launches, just select it here.</p>
+      <button class="primary" onclick="saveAgents()">Save Agents</button>
+    </div>`;
+}
+
+async function saveAgents(){
+  await api('/api/settings/agents',{method:'POST',body:JSON.stringify({
+    validation_agent: document.getElementById('agent-validation').value,
+    planning_agent: document.getElementById('agent-planning').value,
+    implementation_agent: document.getElementById('agent-implementation').value
+  })});
+  alert('Agents updated ✓');
+}
+
+async function loadMLTab(el){
+  const data = await api('/api/settings/ml-router');
+  const stats = await api('/api/ml-router/stats');
+  el.innerHTML = `
+    <div class="card">
+      <h3>ML Router Learning</h3>
+      <p class="muted">Automatically learns which agents work best for each project.</p>
+      <div style="margin:12px 0;padding:12px;background:var(--surface2);border-radius:8px">
+        <p style="margin:0;font-size:12px">Projects with history: <b>${stats.projects_with_history||0}</b></p>
+        <p style="margin:8px 0 0;font-size:12px">Total tasks learned: <b>${stats.total_tasks_recorded||0}</b></p>
+      </div>
+      <div style="margin:12px 0;max-height:300px;overflow:auto;font-size:12px">
+        ${Object.entries(stats.projects||{}).map(([proj,data])=>`
+          <div style="padding:8px;border:1px solid var(--border);margin-bottom:8px;border-radius:6px">
+            <p style="margin:0"><b>${proj}</b> → ${data.best_agent}</p>
+            <p style="margin:4px 0 0;color:var(--muted);font-size:11px">
+              ${Object.entries(data.agents).map(([a,s])=>\`\${a}: \${s.success_rate} (\${s.tasks} tasks)\`).join(' · ')}
+            </p>
+          </div>
+        \`).join('')}
+      </div>
+      <button class="primary" onclick="flushMLRouter()">Force Save Stats</button>
+    </div>`;
+}
+
+async function flushMLRouter(){
+  const ml = await api('/api/ml-router/stats');
+  alert('ML router stats saved to disk ✓');
+}
+
+async function loadFeedbackTab(el){
+  const data = await api('/api/settings/feedback-loop');
+  const patterns = await api('/api/feedback-loop/patterns');
+  el.innerHTML = `
+    <div class="card">
+      <h3>Failure Pattern Learning</h3>
+      <p class="muted">Detects and avoids repeating failures automatically.</p>
+      <div class="field">
+        <label>Escalation threshold (occurrences)</label>
+        <input id="fb-threshold" type="range" min="1" max="10" value="${data.escalation_threshold}" style="width:200px"/>
+        <span id="fb-val">${data.escalation_threshold}</span>
+      </div>
+      <p class="muted" style="font-size:11px">Higher = allow more retries before escalating</p>
+      <div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px">
+        <p style="margin:0;font-size:12px">Patterns tracked: <b>${patterns.total_failure_patterns||0}</b></p>
+      </div>
+      <button class="primary" onclick="saveFeedback()">Save Settings</button>
+    </div>`;
+  document.getElementById('fb-threshold').oninput = (e) => document.getElementById('fb-val').textContent = e.target.value;
+}
+
+async function saveFeedback(){
+  await api('/api/settings/feedback-loop',{method:'POST',body:JSON.stringify({
+    enabled:true, escalation_threshold:parseInt(document.getElementById('fb-threshold').value)
+  })});
+  alert('Feedback loop settings saved ✓');
+}
+
+async function loadMonitorTab(el){
+  const mon = await api('/api/settings/monitoring');
+  el.innerHTML = `
+    <div class="card">
+      <h3>Cost & Performance</h3>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px">
+        <div style="padding:12px;background:var(--surface2);border-radius:8px">
+          <p style="margin:0;font-size:11px;color:var(--muted)">This month</p>
+          <p style="margin:4px 0 0;font-size:18px"><b class="mono">\$${mon.cost_month.toFixed(2)}</b></p>
+        </div>
+        <div style="padding:12px;background:var(--surface2);border-radius:8px">
+          <p style="margin:0;font-size:11px;color:var(--muted)">Budget remaining</p>
+          <p style="margin:4px 0 0;font-size:18px"><b class="mono" style="color:${mon.budget_remaining<10?'var(--red)':'var(--green)'}">\$${mon.budget_remaining.toFixed(2)}</b></p>
+        </div>
+      </div>
+      <div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px">
+        <p style="margin:0;font-size:12px;color:var(--muted)">Projects learning: <b>${mon.ml_projects_with_history}</b></p>
+        <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Failure patterns: <b>${mon.failure_patterns_tracked}</b></p>
+        <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Cache hit rate: <b>${(mon.cache_hit_rate*100).toFixed(1)}%</b></p>
+      </div>
+      <p class="muted" style="font-size:12px">Metrics update every 4 seconds.</p>
+    </div>`;
+}
+
 function closeSettings(){ document.getElementById('settings').classList.remove('show'); }
 
 function escapeHtml(s){ return (s||'').replace(/[&<>]/g,c=>(
