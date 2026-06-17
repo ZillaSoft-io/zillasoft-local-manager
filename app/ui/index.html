@@ -134,7 +134,10 @@ async function refresh(){
     renderTicker(); renderSidebar();
     if(S.sel){ const cur = await api('/api/sessions/'+S.sel.id); S.sel = cur;
       if(document.getElementById('detail')) renderDetail(); }
-  }catch(e){}
+  }catch(e){
+    console.error('API error:', e);
+    document.getElementById('main').innerHTML = '<p class="err" style="padding:20px">Error: '+e.message+'</p>';
+  }
 }
 function renderTicker(){
   const c = S.cost||{};
