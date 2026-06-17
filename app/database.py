@@ -69,6 +69,9 @@ _JSON_COLUMNS = frozenset({
     "opus_changes", "sonnet_review", "deployment_status",
 })
 
+# Cost-related helper constants
+_COST_BREAKDOWN_KEY = "cost_breakdown"
+
 _VALID_STATUSES = frozenset({
     "in_progress", "awaiting_approval", "approved", "deployed",
     "failed", "rolled_back", "stopped", "paused",
@@ -140,6 +143,14 @@ class Database:
                 "SELECT * FROM sessions WHERE id = ?", (session_id,))
             row = cur.fetchone()
         return self._decode_row(row) if row else None
+
+    def get_cost_breakdown(self, session_id: str) -> Optional[dict[str, Any]]:
+        """Retrieve cost breakdown for a session (or None)."""
+        session = self.get_session(session_id)
+        if not session:
+            return None
+        breakdown = session.get(_COST_BREAKDOWN_KEY)
+        return breakdown if isinstance(breakdown, dict) else None
 
     def list_sessions(self, limit: int = 20,
                       project: Optional[str] = None) -> list[dict[str, Any]]:
