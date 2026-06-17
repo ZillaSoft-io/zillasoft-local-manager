@@ -261,8 +261,38 @@ Changelog entry (1-2 sentences):"""
             all_commits.extend(commits)
         return all_commits
 
+    def _find_today_entry(self, entries_text: str) -> tuple[int, int] | None:
+        """Find the start and end indices of today's entry in the entries array.
+
+        Returns (start_idx, end_idx) or None if not found.
+        """
+        from datetime import datetime
+        today = datetime.now(timezone.utc).date()
+        search_str = f'date: "{today.strftime("%B %d, %Y")}"'
+
+        idx = entries_text.find(search_str)
+        if idx == -1:
+            return None
+
+        # Find the start of this entry (opening brace)
+        start_idx = entries_text.rfind("{", 0, idx)
+        if start_idx == -1:
+            return None
+
+        # Find the end of this entry (closing brace and comma)
+        end_idx = entries_text.find("},", idx)
+        if end_idx == -1:
+            return None
+
+        end_idx += 2  # Include the "},"
+
+        return (start_idx, end_idx)
+
     def update_changelog(self) -> bool:
-        """Scan all projects, summarize, and add to website changelog.astro."""
+        """Scan all projects, summarize, and add/update website changelog.astro.
+
+        If an entry for today already exists, it's replaced. Otherwise a new one is added.
+        """
         if not self.should_update():
             logger.info("Changelog updated recently, skipping")
             return False
@@ -295,14 +325,24 @@ Changelog entry (1-2 sentences):"""
             # Read current changelog
             before, entries_text, after = self._read_changelog_file()
 
-            # Insert new entry at the top
-            new_entries = entry_obj + "\n" + entries_text
+            # Check if today's entry already exists
+            today_entry = self._find_today_entry(entries_text)
+
+            if today_entry:
+                # Replace existing entry
+                start_idx, end_idx = today_entry
+                new_entries = entries_text[:start_idx] + entry_obj + "\n" + entries_text[end_idx:]
+                logger.info(f"Replacing existing entry for today")
+            else:
+                # Insert new entry at the top
+                new_entries = entry_obj + "\n" + entries_text
+                logger.info(f"Adding new entry for today")
 
             # Write updated file
             new_content = before + new_entries + after
             with open(self.changelog_file, "w", encoding="utf-8") as f:
                 f.write(new_content)
-            logger.info(f"Updated changelog.astro with new entry")
+            logger.info(f"Updated changelog.astro")
 
             # Commit to website repo
             subprocess.run(
