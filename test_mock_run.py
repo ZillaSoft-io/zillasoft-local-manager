@@ -91,12 +91,12 @@ def test_with_config():
     logger.info("MOCK CONFIG TEST — Full agent factory with config")
     logger.info("=" * 70)
 
-    config = ConfigHandler()
-    # Override to use mock mode
-    config._env["LOCAL_MANAGER_MOCK_MODE"] = "true"
-    config._env["MOCK_SESSION_ID"] = "demo"
-    config._env["MOCK_ENABLE_LATENCY"] = "false"  # Fast for testing
+    # Set environment variables for mock mode
+    os.environ["LOCAL_MANAGER_MOCK_MODE"] = "true"
+    os.environ["MOCK_SESSION_ID"] = "demo"
+    os.environ["MOCK_ENABLE_LATENCY"] = "false"  # Fast for testing
 
+    config = ConfigHandler()
     haiku, sonnet, opus, tracker = build_agents(config, mock_mode=True)
 
     logger.info("✓ Mock agents created via config")
@@ -107,6 +107,11 @@ def test_with_config():
     # Quick test
     plan = sonnet.generate_dry_run_plan("Test context")
     logger.info(f"\n✓ Test call successful: {len(plan.text)} chars returned\n")
+
+    # Clean up
+    del os.environ["LOCAL_MANAGER_MOCK_MODE"]
+    del os.environ["MOCK_SESSION_ID"]
+    del os.environ["MOCK_ENABLE_LATENCY"]
 
 
 def test_fallback_chain():
