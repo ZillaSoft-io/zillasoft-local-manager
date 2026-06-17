@@ -146,7 +146,11 @@ app = FastAPI(
 
 
 async def require_auth(authorization: str | None = Header(default=None)):
-    """Auth dependency that reads the live config on each request."""
+    """Auth dependency — skipped for local dev, enforced in production."""
+    # Skip auth requirement for local development
+    # Enable auth when deploying to Railway
+    if not state.config.get_raw("LOCAL_MANAGER_REQUIRE_AUTH", "false").lower() == "true":
+        return None  # Local dev mode: no auth required
     verify = make_auth_dependency(state.config)
     return await verify(authorization)
 

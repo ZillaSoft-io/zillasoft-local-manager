@@ -69,13 +69,7 @@
 </style>
 </head>
 <body>
-<div id="gate" class="gate">
-  <h1>ZillaSoft Local Manager</h1>
-  <p class="muted">Paste your API token (printed in the server console on startup).</p>
-  <input id="gate-token" style="width:380px" placeholder="LOCAL_MANAGER_AUTH_TOKEN"/>
-  <button class="primary" onclick="saveToken()">Connect</button>
-  <p id="gate-err" class="err"></p>
-</div>
+<!-- Auth gate removed for local dev -->
 
 <header style="display:none" id="app-header">
   <h1>⚡ Local Manager</h1>
@@ -127,10 +121,6 @@ function saveToken(){
 function logout(){ localStorage.removeItem('zlm_token'); S.token=''; location.reload(); }
 
 async function boot(){
-  try{ await api('/api/cost'); }
-  catch(e){ document.getElementById('gate-err').textContent =
-    'Connection failed: '+e.message; return; }
-  document.getElementById('gate').style.display='none';
   document.getElementById('app-header').style.display='flex';
   document.getElementById('app').style.display='flex';
   refresh(); setInterval(refresh, 4000);
@@ -566,7 +556,7 @@ function escapeHtml(s){ return (s||'').replace(/[&<>]/g,c=>(
   {'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function escapeAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
 
-if(S.token) boot();
+boot();  // Auto-boot on load (local dev mode)
 </script>
 </body>
 </html>
