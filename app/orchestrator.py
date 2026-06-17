@@ -20,6 +20,7 @@ from .cost import record_session_cost
 from .cost.budgeting import BudgetManager
 from .execution import run_tests
 from .execution.executor import CommandStopped
+from .feedback_loop import get_feedback_loop
 from .observability import get_observability
 from .persistent_cache import get_persistent_cache
 from .vcs import GitOps
@@ -46,6 +47,7 @@ class Orchestrator:
         self._ml_router = get_ml_router()
         self._persistent_cache = get_persistent_cache()
         self._observability = get_observability()
+        self._feedback_loop = get_feedback_loop()
 
     # ------------------------------------------------------------------ #
     def run_session(self, session_id: str) -> dict:
@@ -175,6 +177,22 @@ class Orchestrator:
 
             if test_result.ok:
                 return self._finish(session, project, tracker, cycle)
+
+            # Failure -> record for feedback loop
+            error_msg = test_result.tail()[:200] if test_result.tail() else "Test failed"
+            self._feedback_loop.record_failure(
+                error_msg=error_msg,
+                project=project,
+                agent=session.get("routing_decision", "unknown"),
+                task_type=task_type or "unknown",
+            )
+
+            # Check if we should escalate instead of retrying
+            if self._feedback_loop.should_escalate(error_msg, project, cycle, max_cycles):
+                return self._escalate(
+                    session_id, project, tracker,
+                    f"Test failed with known pattern (seen before). "
+                    f"Escalating instead of retry #{cycle + 1}.")
 
             # Failure -> new task for Opus (not a retry).
             instructions = sonnet.bug_from_failure(
