@@ -5,10 +5,14 @@ cost tracking, deployment tracking, and the web UI.
 """
 from __future__ import annotations
 
+print("[STARTUP] Importing modules...")
+
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header
+
+print("[STARTUP] FastAPI imported")
 
 from . import __version__
 from .agents import build_agents
@@ -26,6 +30,8 @@ from .newapp import NewAppProvisioner
 from .notifications import Notifier
 from .orchestrator import Orchestrator
 from .release import ReleaseManager
+
+print("[STARTUP] All modules imported successfully")
 
 logger = logging.getLogger(__name__)
 
