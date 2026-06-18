@@ -374,7 +374,7 @@ async function saveAgents(){
 
 async function loadMLTab(el){
   const data = await api('/api/settings/ml-router');
-  const stats = await api('/api/ml-router/stats');
+  const stats = await api('/api/settings/ml-router/stats');
   el.innerHTML = `
     <div class="card">
       <h3>ML Router Learning</h3>
@@ -398,13 +398,13 @@ async function loadMLTab(el){
 }
 
 async function flushMLRouter(){
-  const ml = await api('/api/ml-router/stats');
+  const ml = await api('/api/settings/ml-router/stats');
   alert('ML router stats saved to disk ✓');
 }
 
 async function loadFeedbackTab(el){
   const data = await api('/api/settings/feedback-loop');
-  const patterns = await api('/api/feedback-loop/patterns');
+  const patterns = await api('/api/settings/feedback-loop/patterns');
   el.innerHTML = `
     <div class="card">
       <h3>Failure Pattern Learning</h3>

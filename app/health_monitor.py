@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -71,15 +71,30 @@ class HealthMonitor:
 
         fallback = get_fallback_chain()
 
+        # Read the model IDs from the same config the real agents use, so the
+        # health check pings exactly the models the pipeline runs on. Hardcoding
+        # stale IDs here previously 404'd and marked every agent DEGRADED.
+        config = getattr(client, "_config", None)
+        model_keys = {
+            "haiku": "ANTHROPIC_MODEL_HAIKU",
+            "sonnet": "ANTHROPIC_MODEL_SONNET",
+            "opus": "ANTHROPIC_MODEL_OPUS",
+        }
+        model_defaults = {
+            "haiku": "claude-haiku-4-5",
+            "sonnet": "claude-sonnet-4-6",
+            "opus": "claude-opus-4-8",
+        }
+
         for agent_name in ["haiku", "sonnet", "opus"]:
             try:
                 # Lightweight token count request (not a full inference)
                 # This tests API connectivity and auth without using quota
-                model = {
-                    "haiku": "claude-3-5-haiku-20241022",
-                    "sonnet": "claude-3-5-sonnet-20241022",
-                    "opus": "claude-opus-4-1-20250805",
-                }.get(agent_name, "claude-3-5-sonnet-20241022")
+                if config is not None:
+                    model = config.get_raw(model_keys[agent_name],
+                                           model_defaults[agent_name])
+                else:
+                    model = model_defaults[agent_name]
 
                 # This is a very cheap operation (no inference, just tokenization)
                 token_count = client.count_tokens("health check", model=model)

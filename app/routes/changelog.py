@@ -43,7 +43,7 @@ async def trigger_changelog_update() -> dict[str, bool | str]:
 
 
 @router.get("/status")
-async def get_changelog_status() -> dict[str, str | None]:
+async def get_changelog_status() -> dict[str, str | bool | None]:
     """Get last changelog update timestamp."""
     try:
         updater = get_changelog_updater()
