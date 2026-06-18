@@ -18,6 +18,10 @@ from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
+# main.py imports this module at the bottom (after `state` is defined), and
+# `_main.state` is only accessed at request time, so this is not circular.
+from .. import main as _main  # noqa: E402
+
 router = APIRouter(prefix="/api", tags=["control"])
 
 

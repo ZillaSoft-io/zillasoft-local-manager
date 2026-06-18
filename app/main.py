@@ -230,7 +230,8 @@ app.include_router(config_router)
 app.include_router(settings_router)
 app.include_router(changelog_router)
 
-if __name__ == "__main__":
-    import uvicorn
-    print("[STARTUP] Starting uvicorn server...")
-    uvicorn.run(app, host="localhost", port=5555)
+# NOTE: Do not launch via `python -m app.main`. That loads this file as the
+# `__main__` module, so the route modules' `from .. import main` re-imports it
+# a second time as `app.main` and triggers a circular import. Launch with
+# `python run.py` (or launch.bat), which imports the app canonically as
+# `app.main:app`.

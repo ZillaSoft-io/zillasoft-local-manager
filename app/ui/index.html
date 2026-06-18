@@ -123,7 +123,8 @@ function logout(){ localStorage.removeItem('zlm_token'); S.token=''; location.re
 function boot(){
   document.getElementById('app-header').style.display='flex';
   document.getElementById('app').style.display='flex';
-  document.getElementById('main').innerHTML = '<div class="card"><h3>App Started</h3><p>If you see this, the UI is working!</p></div>';
+  refresh(); setInterval(refresh, 4000);
+  newTask();
 }
 
 async function refresh(){
@@ -387,10 +388,10 @@ async function loadMLTab(el){
           <div style="padding:8px;border:1px solid var(--border);margin-bottom:8px;border-radius:6px">
             <p style="margin:0"><b>${proj}</b> → ${data.best_agent}</p>
             <p style="margin:4px 0 0;color:var(--muted);font-size:11px">
-              ${Object.entries(data.agents).map(([a,s])=>\`\${a}: \${s.success_rate} (\${s.tasks} tasks)\`).join(' · ')}
+              ${Object.entries(data.agents).map(([a,s])=>`${a}: ${s.success_rate} (${s.tasks} tasks)`).join(' · ')}
             </p>
           </div>
-        \`).join('')}
+        `).join('')}
       </div>
       <button class="primary" onclick="flushMLRouter()">Force Save Stats</button>
     </div>`;
@@ -558,10 +559,8 @@ function escapeHtml(s){ return (s||'').replace(/[&<>]/g,c=>(
   {'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function escapeAttr(s){ return (s||'').replace(/"/g,'&quot;'); }
 
-// Auto-boot on load
-document.getElementById('app-header').style.display='flex';
-document.getElementById('app').style.display='flex';
-document.getElementById('main').innerHTML = '<div class="card"><h3>App Started</h3><p>Server is running!</p></div>';
+// Auto-boot on load (local dev mode — no auth gate)
+boot();
 </script>
 </body>
 </html>
