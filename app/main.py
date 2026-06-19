@@ -88,6 +88,10 @@ async def lifespan(app: FastAPI):
         if mock_mode:
             logger.info("MOCK MODE ENABLED")
 
+        # Populate the agent registry (backs Settings -> Agents dropdowns).
+        from .agents.registry import register_default_agents
+        register_default_agents()
+
         haiku, sonnet, opus, usage = build_agents(config, mock_mode=mock_mode)
         state.haiku, state.sonnet, state.opus, state.usage = haiku, sonnet, opus, usage
         state.conversation = ConversationManager(config, state.db, state.audit, haiku)

@@ -91,13 +91,20 @@ class Orchestrator:
             logger.info(f"Cost estimate: {estimator.format_estimate(cost_estimate)}")
             self._db.update_session(session_id, cost_estimate=cost_estimate)
 
-        # Phase 3: Budget check (prevent overspend)
+        # Phase 3: Budget check (SOFT cap — warn but never block work in flight).
+        # If we're already at/over the monthly cap we notify and proceed so the
+        # task at hand can finish. Per-threshold (50/80/100%) warnings still fire
+        # in _record_cost after the run.
         with self._observability.tracer.span("budget_check"):
-            if not self._budget.can_accept_task():
-                return {
-                    "status": "rejected",
-                    "reason": f"Budget limit reached: ${self._budget.current_spend:.2f} / ${self._budget.monthly_cap:.2f}",
-                }
+            if self._budget.cap > 0 and self._budget.spent >= self._budget.cap:
+                msg = (f"Monthly budget reached "
+                       f"(${self._budget.spent:.2f} / ${self._budget.cap:.2f}). "
+                       f"Proceeding anyway (soft cap).")
+                logger.warning(msg)
+                try:
+                    self._notifier.desktop("Budget warning", msg)
+                except Exception:
+                    pass
 
         haiku, sonnet, opus, tracker = self._agent_factory()
         repo_path, test_command = self._target(session)

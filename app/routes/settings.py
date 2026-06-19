@@ -94,7 +94,9 @@ async def set_budget_settings(settings: BudgetSettings) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="Cap must be > $0")
 
     budget = _main.state.budget
-    budget.cap = settings.monthly_cap_usd
+    # `cap` is a read-only property backed by config; write through config.
+    _main.state.config.set("LOCAL_MANAGER_MONTHLY_COST_CAP",
+                           float(settings.monthly_cap_usd), actor="system")
     logger.info(f"Budget cap updated: ${settings.monthly_cap_usd}")
 
     return {

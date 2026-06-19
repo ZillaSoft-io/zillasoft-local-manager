@@ -131,3 +131,22 @@ def get_registry() -> AgentRegistry:
 def register_agent(config: AgentConfig) -> None:
     """Convenience function to register an agent in the global registry."""
     _REGISTRY.register(config)
+
+
+def register_default_agents() -> None:
+    """Populate the global registry with the three standard agents.
+
+    The registry backs the Settings -> Agents dropdowns and role selection.
+    Actual inference prompts live in the agent classes; the system_prompt here
+    is descriptive only. Called once at startup.
+    """
+    defaults = [
+        AgentConfig("haiku", "ANTHROPIC_MODEL_HAIKU", "ANTHROPIC_EFFORT_HAIKU",
+                    "Fast, cheap validation and review.", "cheap", False),
+        AgentConfig("sonnet", "ANTHROPIC_MODEL_SONNET", "ANTHROPIC_EFFORT_SONNET",
+                    "Balanced planning and analysis.", "medium", True),
+        AgentConfig("opus", "ANTHROPIC_MODEL_OPUS", "ANTHROPIC_EFFORT_OPUS",
+                    "Powerful implementation.", "expensive", True),
+    ]
+    for cfg in defaults:
+        _REGISTRY.register(cfg)
