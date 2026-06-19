@@ -81,14 +81,19 @@ class SessionRecoveryManager:
 
         max_incomplete = max(incomplete_cycles)
 
+        # deployment_status may be missing, None, or lack base_sha — guard all.
+        dep = session.get("deployment_status") or {}
+        base_sha = (dep.get("base_sha") if isinstance(dep, dict) else None) or "unknown"
+
         return {
             "session_id": session_id,
             "project": session.get("project"),
             "task_type": session.get("task_type"),
             "status": session.get("status"),
             "incomplete_at_cycle": max_incomplete,
-            "last_commit": session.get("deployment_status", {}).get("base_sha", "unknown")[:8],
-            "action": f"Retry cycle {max_incomplete + 1}",
+            "last_commit": base_sha[:8],
+            "action": "Re-run session (prior git commits preserved; "
+                      "checkpoints + audit kept for troubleshooting)",
         }
 
     def format_for_ui(self, sessions: list[dict]) -> str:

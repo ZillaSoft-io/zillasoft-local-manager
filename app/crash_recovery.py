@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -72,15 +73,23 @@ class CrashRecoveryManager:
         path = self._checkpoint_path(session_id, cycle_num, checkpoint_type)
 
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({
-                    "session_id": checkpoint.session_id,
-                    "cycle_num": checkpoint.cycle_num,
-                    "checkpoint_type": checkpoint.checkpoint_type,
-                    "timestamp": checkpoint.timestamp,
-                    "data": checkpoint.data,
-                    "error": checkpoint.error,
-                }, f, indent=2)
+            # Atomic write: write to a temp file, fsync, then rename. A crash
+            # mid-write leaves the old (or no) checkpoint intact rather than a
+            # truncated/corrupt file — critical for a crash-recovery system.
+            tmp = path.with_suffix(".json.tmp")
+            payload = {
+                "session_id": checkpoint.session_id,
+                "cycle_num": checkpoint.cycle_num,
+                "checkpoint_type": checkpoint.checkpoint_type,
+                "timestamp": checkpoint.timestamp,
+                "data": checkpoint.data,
+                "error": checkpoint.error,
+            }
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
 
             if error:
                 logger.error(f"Saved ERROR checkpoint: {path} ({error})")
