@@ -71,10 +71,11 @@ _VERDICT_SCHEMA = {
 _COMPLEXITY_SCHEMA = {
     "type": "object",
     "properties": {
-        "agent": {"type": "string", "enum": ["haiku", "sonnet", "opus"]},
+        "complexity": {"type": "string", "enum": ["low", "medium", "high"]},
+        "effort": {"type": "string", "enum": ["low", "medium", "high"]},
         "reason": {"type": "string"},
     },
-    "required": ["agent", "reason"],
+    "required": ["complexity", "effort", "reason"],
     "additionalProperties": False,
 }
 
@@ -270,24 +271,34 @@ class Agent:
             corrections=str(data.get("corrections", "")).strip(),
         )
 
-    def classify_complexity(self, context: str, plan: str) -> tuple[str, str]:
-        """Pick the cheapest model that can implement this task reliably.
+    def classify_complexity(self, context: str, plan: str) -> tuple[str, str, str]:
+        """Judge a task on two INDEPENDENT axes.
 
-        Returns (agent_label, reason). Conservative: when uncertain it picks the
-        MORE capable model, and a malformed response defaults to "opus".
+        complexity -> which model tier should implement:
+          low (trivial mechanical edit), medium (moderate work), high (complex).
+        effort -> how much reasoning depth, independent of complexity:
+          low (localized/mechanical), medium, high (deep multi-step). A hard bug
+          confined to one function can be high complexity but low/medium effort.
+
+        Returns (complexity, effort, reason). Conservative: when uncertain it
+        picks the HIGHER level, and a malformed response defaults to high/high.
         """
         prompt = (
-            "Route an implementation task to the cheapest model that can do it "
-            "RELIABLY. Tiers:\n"
-            "- haiku: trivial mechanical edits (fix a typo, edit a comment, "
-            "change a config value, rename, simple text/string change). No logic.\n"
-            "- sonnet: moderate work (small feature, refactor, multi-file edit, "
-            "straightforward bug fix).\n"
-            "- opus: complex work (non-trivial logic, new subsystem, tricky bug, "
-            "careful multi-step reasoning).\n\n"
-            "When uncertain, choose the MORE capable model.\n\n"
+            "Assess an implementation task on two INDEPENDENT axes.\n\n"
+            "complexity (which model is needed):\n"
+            "- low: trivial mechanical edit (typo, comment, config value, rename).\n"
+            "- medium: moderate work (small feature, refactor, simple bug fix).\n"
+            "- high: complex work (non-trivial logic, new subsystem, tricky bug).\n\n"
+            "effort (how much reasoning depth), independent of complexity:\n"
+            "- low: localized/mechanical, little reasoning.\n"
+            "- medium: some reasoning across a few places.\n"
+            "- high: deep, careful multi-step reasoning.\n"
+            "A hard bug confined to one function can be high complexity but "
+            "low/medium effort; a trivial change across many files can be higher "
+            "effort.\n\n"
+            "When uncertain, pick the HIGHER level on either axis.\n\n"
             f"Task context:\n{context}\n\nPlan:\n{plan}\n\n"
-            "Pick the agent and give a one-line reason."
+            "Give complexity, effort, and a one-line reason."
         )
         resp = self.ask(
             prompt,
@@ -297,10 +308,13 @@ class Agent:
             system=ORCHESTRATE_SYSTEM,
         )
         data = self._parse_json(resp.text)
-        agent = str(data.get("agent", "opus")).lower().strip()
-        if agent not in ("haiku", "sonnet", "opus"):
-            agent = "opus"
-        return agent, str(data.get("reason", "")).strip()
+        complexity = str(data.get("complexity", "high")).lower().strip()
+        if complexity not in ("low", "medium", "high"):
+            complexity = "high"
+        effort = str(data.get("effort", "high")).lower().strip()
+        if effort not in ("low", "medium", "high"):
+            effort = "high"
+        return complexity, effort, str(data.get("reason", "")).strip()
 
     def clarify(self, *, clarify_instructions: str,
                 messages: list[dict]) -> ClarifyTurn:
@@ -332,10 +346,16 @@ class Agent:
     def implement_with_tools(self, instructions: str, *, repo_path: str,
                              executor, session_id: Optional[str] = None,
                              controller=None, max_steps: int = 40,
-                             max_tokens: int = 16000) -> ImplementResult:
+                             max_tokens: int = 16000,
+                             effort: Optional[str] = None) -> ImplementResult:
         """Run the bash tool-use loop until the implementer finishes or is
-        cancelled. Uses IMPLEMENT_SYSTEM regardless of which model runs it."""
+        cancelled. Uses IMPLEMENT_SYSTEM regardless of which model runs it.
+        `effort` overrides the model's configured effort (the independent
+        effort filter); None keeps the model default. Gated per-model by the
+        client, so it's safe on any model."""
         from ..execution.executor import CommandStopped
+
+        effort = effort or self.effort
 
         messages: list[dict] = [{"role": "user", "content": (
             "Implement the following instructions in the repository. Follow the "
@@ -356,7 +376,7 @@ class Agent:
 
             resp = self.client.complete(
                 model=self.model, system=IMPLEMENT_SYSTEM, messages=messages,
-                max_tokens=max_tokens, effort=self.effort, thinking=True,
+                max_tokens=max_tokens, effort=effort, thinking=True,
                 tools=[_BASH_TOOL], agent_label=self.label)
             msg = resp.raw
 

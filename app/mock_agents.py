@@ -207,10 +207,10 @@ class MockAgent:
             "corrections": "",
         })()
 
-    def classify_complexity(self, context: str, plan: str) -> tuple[str, str]:
-        """Simulate implementation-complexity routing."""
+    def classify_complexity(self, context: str, plan: str) -> tuple[str, str, str]:
+        """Simulate routing: (complexity, effort, reason)."""
         self._apply_latency(250)
-        return "haiku", "mock: trivial change"
+        return "low", "low", "mock: trivial change"
 
     def review_after_tests(self, **kwargs) -> str:
         """Simulate test review."""
