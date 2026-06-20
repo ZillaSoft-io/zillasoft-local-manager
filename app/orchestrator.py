@@ -87,7 +87,7 @@ class Orchestrator:
                 simple_change=False
             )
             logger.info(f"Cost estimate: {estimator.format_estimate(cost_estimate)}")
-            self._db.update_session(session_id, cost_estimate=cost_estimate)
+            # (not persisted — there is no cost_estimate column; it's logged only)
 
         # Phase 3: Budget check (SOFT cap — warn but never block work in flight).
         # If we're already at/over the monthly cap we notify and proceed so the
@@ -105,6 +105,9 @@ class Orchestrator:
                     pass
 
         haiku, sonnet, opus, tracker = self._agent_factory()
+        # The tracker is shared across sessions (agents are cached), so zero it
+        # at the start or this session's cost would include every prior session.
+        tracker.reset()
         repo_path, test_command = self._target(session)
 
         # ---- pre-flight ----
@@ -294,11 +297,16 @@ class Orchestrator:
                 )
                 effort_config = effort_router.get_effort_config(review_effort)
 
-                # Build kwargs for review call
+                # Map the routed effort level to an API effort string. Gated
+                # per-model by the client, so it's safe to pass to any agent
+                # (Haiku ignores it). review_after_tests takes `effort` — passing
+                # an unsupported kwarg here used to TypeError on Sonnet/Opus.
+                _eff_map = {"low": "low", "normal": "medium", "high": "high"}
                 review_kwargs = {
                     "opus_summary": opus_summary,
                     "test_summary": test_result.summary,
-                    "passed": test_result.ok
+                    "passed": test_result.ok,
+                    "effort": _eff_map.get(review_effort.value, "medium"),
                 }
 
                 # Resilience: use fallback chain for test review (in case primary agent is down)
@@ -307,20 +315,8 @@ class Orchestrator:
                 fallback = get_fallback_chain()
                 agent_calls = {
                     "haiku": lambda: haiku.review_after_tests(**review_kwargs),
-                    "sonnet": lambda: (
-                        sonnet.review_after_tests(
-                            **{**review_kwargs,
-                               "thinking_budget_tokens": effort_config["thinking_budget_tokens"]}
-                        ) if effort_config.get("thinking_budget_tokens") else
-                        sonnet.review_after_tests(**review_kwargs)
-                    ),
-                    "opus": lambda: (
-                        opus.review_after_tests(
-                            **{**review_kwargs,
-                               "thinking_budget_tokens": effort_config["thinking_budget_tokens"]}
-                        ) if effort_config.get("thinking_budget_tokens") else
-                        opus.review_after_tests(**review_kwargs)
-                    ),
+                    "sonnet": lambda: sonnet.review_after_tests(**review_kwargs),
+                    "opus": lambda: opus.review_after_tests(**review_kwargs),
                 }
 
                 try:
@@ -361,11 +357,14 @@ class Orchestrator:
                         "review": review
                     },
                 })
+                # Store the review in `sonnet_review` (the column the UI reads);
+                # `testing` is not a column. Keep the same fields so the audit /
+                # UI both have runner, reviewer, review, and test summary.
                 self._db.update_session(
                     session_id, cycle_count=cycle,
                     opus_changes={"commands": opus_result.commands,
                                   "commit_sha": opus_result.last_commit_sha},
-                    testing={
+                    sonnet_review={
                         "runner": test_runner_name,
                         "reviewer": review_agent_name,
                         "review_effort": review_effort.value,

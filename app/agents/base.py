@@ -219,13 +219,14 @@ class Agent:
         )
 
     def review_after_tests(self, *, opus_summary: str, test_summary: str,
-                           passed: bool) -> str:
+                           passed: bool, effort: Optional[str] = None) -> str:
         prompt = (
             "Review the change against the test results in 2-4 sentences.\n\n"
             f"What the implementer did:\n{opus_summary}\n\n"
             f"Test result: {'PASSED' if passed else 'FAILED'} — {test_summary}"
         )
-        return self.ask(prompt, max_tokens=1000, system=PLAN_SYSTEM).text
+        return self.ask(prompt, max_tokens=1000, system=PLAN_SYSTEM,
+                        effort=effort).text
 
     def bug_from_failure(self, *, instructions: str, test_output: str) -> str:
         """Turn a test failure into a focused NEW task (not a retry)."""

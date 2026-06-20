@@ -62,6 +62,16 @@ class UsageTracker:
             self.by_model[model] = self.by_model.get(model, Usage()) + usage
             self.total = self.total + usage
 
+    def reset(self) -> None:
+        """Clear all accumulated usage. The agents (and their shared tracker) are
+        cached across sessions, so the orchestrator calls this at the start of
+        each session — otherwise every session's cost would be the cumulative
+        total of all prior sessions."""
+        with self._lock:
+            self.by_agent = {}
+            self.by_model = {}
+            self.total = Usage()
+
     def snapshot(self) -> dict:
         with self._lock:
             return {
