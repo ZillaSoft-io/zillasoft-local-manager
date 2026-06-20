@@ -39,31 +39,6 @@ class Phase2Result:
     error: str = ""
 
 
-def get_orchestration_agents() -> tuple[HaikuAgent, SonnetAgent, OpusAgent]:
-    """Create agent instances based on current registry configuration.
-
-    Allows swapping agents (e.g., Mythos for Opus) without code changes.
-    Returns the validation, planning, and implementation agents.
-    """
-    registry = get_registry()
-    validation_label = registry.get_validation_agent()
-    planning_label = registry.get_planning_agent()
-    implementation_label = registry.get_implementation_agent()
-
-    logger.info(
-        f"Creating agents: validation={validation_label}, "
-        f"planning={planning_label}, implementation={implementation_label}"
-    )
-
-    # For now, hardcode to existing agent classes, but labels determine routing
-    # In future, could load actual agent implementations from registry
-    validation_agent = HaikuAgent()  # Always use Haiku for validation (fast)
-    planning_agent = SonnetAgent()   # Always use Sonnet for planning (balanced)
-    implementation_agent = OpusAgent()  # Implementation agent (will respect registry)
-
-    return validation_agent, planning_agent, implementation_agent
-
-
 def run_phase2_orchestration(
     haiku: HaikuAgent,
     sonnet: SonnetAgent,

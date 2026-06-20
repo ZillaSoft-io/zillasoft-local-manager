@@ -118,6 +118,7 @@ class AgentFallbackChain:
         task_type: str,
         agent_calls: dict[str, Callable],
         *args,
+        preferred: Optional[str] = None,
         **kwargs
     ) -> tuple[Any, str]:
         """Execute task with automatic fallback to other agents.
@@ -125,12 +126,18 @@ class AgentFallbackChain:
         Args:
             task_type: type of task (e.g., "plan_generation")
             agent_calls: dict mapping agent_name -> callable that executes on that agent
+            preferred: agent to try first (e.g. the configured implementation
+                agent), overriding the default chain order. Falls back to the
+                rest of the chain if it fails.
             *args, **kwargs: passed to each agent callable
 
         Returns:
             (result, agent_used) tuple
         """
         fallback_chain = self.FALLBACK_CHAINS.get(task_type, ["sonnet", "haiku", "opus"])
+        # Lead with the preferred agent (if any), then the rest of the chain.
+        if preferred and preferred in fallback_chain:
+            fallback_chain = [preferred] + [a for a in fallback_chain if a != preferred]
         # Only agents that actually have a callable for this task.
         candidates = [a for a in fallback_chain if a in agent_calls]
         if not candidates:

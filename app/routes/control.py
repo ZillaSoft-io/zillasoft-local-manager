@@ -34,8 +34,7 @@ class PauseBody(BaseModel):
 
 
 def _controller():
-    from .. import main
-    c = getattr(main.state, "controller", None)
+    c = getattr(_main.state, "controller", None)
     if c is None:
         raise HTTPException(status_code=503, detail="Controller not ready.")
     return c

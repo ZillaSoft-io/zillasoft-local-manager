@@ -14,6 +14,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/changelog", tags=["changelog"])
 
+# Imported at the bottom of main.py (after `state`); `_main.state` is
+# only read at request time, so this is not a circular import.
+from .. import main as _main  # noqa: E402
+
 
 @router.post("/update")
 async def trigger_changelog_update() -> dict[str, bool | str]:
@@ -25,9 +29,8 @@ async def trigger_changelog_update() -> dict[str, bool | str]:
     try:
         updater = get_changelog_updater()
         # Set Haiku agent if available
-        from .. import main
-        if hasattr(main.state, 'haiku'):
-            updater.haiku = main.state.haiku
+        if hasattr(_main.state, 'haiku'):
+            updater.haiku = _main.state.haiku
 
         success = updater.update_changelog()
         if success:

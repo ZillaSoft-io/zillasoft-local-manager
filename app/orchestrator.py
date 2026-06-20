@@ -162,12 +162,16 @@ class Orchestrator:
                                   reason="plan_rejected",
                                   context={"error": dr.error, "cycles": 1})
 
-        # For Opus-routed tasks, skip cycle loop (already implemented)
-        if dr.routing_decision == "opus":
-            instructions = dr.implementation
-        else:
-            # For Haiku-routed simple tasks, treat as complete
-            return self._finish(session, project, tracker, cycle=0)
+        # Always run the agentic cycle loop below — it is the only thing that
+        # actually modifies the repo (implement_with_tools), runs tests, and
+        # reviews. The earlier execution_phase only produced draft text, so a
+        # session must never be marked "done" without going through the loop.
+        # `dr.implementation` seeds the first round of instructions.
+        instructions = dr.implementation or ""
+        # Lead the implementation fallback with the configured implementation
+        # agent (Settings -> Agents); the chain handles fallback if it's down.
+        from .agents.registry import get_registry
+        impl_preferred = get_registry().get_implementation_agent()
 
         # ---- cycle loop with crash recovery ----
         recovery = get_crash_recovery()
@@ -202,14 +206,14 @@ class Orchestrator:
 
             try:
                 opus_result, impl_agent = fallback.execute_with_fallback(
-                    "implementation", impl_calls
+                    "implementation", impl_calls, preferred=impl_preferred
                 )
                 impl_step.agent = impl_agent
                 impl_step.complete()
-                if impl_agent != "opus":
-                    logger.warning(f"Implementation degraded: using {impl_agent} instead of opus")
+                if impl_agent != impl_preferred:
+                    logger.warning(f"Implementation degraded: using {impl_agent} instead of {impl_preferred}")
                     # UI 3: Fallback notification (logged for UI display)
-                    logger.info(f"FALLBACK: Implementation used {impl_agent} (primary opus unavailable)")
+                    logger.info(f"FALLBACK: Implementation used {impl_agent} (primary {impl_preferred} unavailable)")
             except CommandStopped:
                 opus_result = None
             except RuntimeError as e:

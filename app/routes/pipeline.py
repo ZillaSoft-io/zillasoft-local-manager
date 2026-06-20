@@ -21,6 +21,10 @@ from ..batch_executor import get_batch_executor, BatchTask
 
 router = APIRouter(prefix="/api", tags=["pipeline"])
 
+# Imported at the bottom of main.py (after `state`); `_main.state` is
+# only read at request time, so this is not a circular import.
+from .. import main as _main  # noqa: E402
+
 _threads: dict[str, threading.Thread] = {}
 
 
@@ -40,12 +44,11 @@ class BatchRunRequest(BaseModel):
 
 def _safe_run(session_id: str) -> None:
     try:
-        from .. import main
-        main.state.orchestrator.run_session(session_id)
+        _main.state.orchestrator.run_session(session_id)
     except Exception as exc:  # never let a worker thread die silently
         logger.exception("Pipeline crashed for %s", session_id)
         try:
-            main.state.db.update_session(session_id, status="failed",
+            _main.state.db.update_session(session_id, status="failed",
                                           error_message=f"pipeline error: {exc}")
         except Exception:
             pass
@@ -53,8 +56,7 @@ def _safe_run(session_id: str) -> None:
 
 @router.post("/sessions/{session_id}/run")
 async def run_pipeline(session_id: str):
-    from .. import main
-    session = main.state.db.get_session(session_id)
+    session = _main.state.db.get_session(session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Session not found.")
     if not (session.get("haiku_context") or {}).get("summary"):
@@ -82,8 +84,7 @@ async def run_batch_sessions(req: BatchRunRequest) -> dict[str, Any]:
     """
     # Validate all sessions exist
     for session_id in req.session_ids:
-        from .. import main
-        session = main.state.db.get_session(session_id)
+        session = _main.state.db.get_session(session_id)
         if session is None:
             raise HTTPException(
                 status_code=404,

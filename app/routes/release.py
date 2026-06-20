@@ -20,14 +20,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["release"])
 
+# Imported at the bottom of main.py (after `state`); `_main.state` is
+# only read at request time, so this is not a circular import.
+from .. import main as _main  # noqa: E402
+
 
 class ReviewBody(BaseModel):
     notes: str = ""
 
 
 def _rel():
-    from .. import main
-    r = getattr(main.state, "release", None)
+    r = getattr(_main.state, "release", None)
     if r is None:
         raise HTTPException(status_code=503, detail="Release manager not ready.")
     return r
