@@ -3,6 +3,11 @@
 Tests are run by the executor (a shell command), not by an agent, so this does
 NOT pick a "test runner". It produces a simple/complex signal that drives how
 much effort the review step spends (deeper review for complex changes).
+
+Designed to never destabilise the pipeline: the scan is bounded (line count and
+line length), it only looks at the actually-changed lines, and analyze_diff
+never raises — any unexpected error falls back to COMPLEX (the safe,
+deeper-review direction).
 """
 from __future__ import annotations
 
@@ -10,63 +15,51 @@ import logging
 import re
 import subprocess
 from enum import Enum
-from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 
 class ChangeComplexity(str, Enum):
-    """Change complexity levels."""
-    SIMPLE = "haiku"      # Rename, typo, one-liner fixes
-    COMPLEX = "sonnet"    # New features, logic changes, refactoring
+    """How involved a code change is (drives review depth)."""
+    SIMPLE = "simple"     # rename, typo, comment, small mechanical edit
+    COMPLEX = "complex"   # new functions/classes, logic, control flow
+
+
+# Structural / logic constructs that mark a change as complex. Compiled once
+# (this also validates them at import). All linear-time — no nested quantifiers,
+# so no catastrophic backtracking even on a long line. Reasonably cross-language
+# (Python / JS / TS), since the projects span both.
+_COMPLEX_PATTERNS = [re.compile(p) for p in (
+    r"\bclass\s+\w+",                    # new class
+    r"\bdef\s+\w+",                      # new function/method (py)
+    r"\bfunction\b",                     # function (js/ts)
+    r"\basync\b",                        # async
+    r"\bimport\b|\brequire\s*\(",        # new dependency
+    r"\bif\b.*:",                        # conditional
+    r"\bfor\b.*\bin\b",                  # loop
+    r"\bwhile\b",                        # while loop
+    r"\b(try|except|finally|catch)\b",   # exception handling
+    r"\blambda\b",                       # lambda
+    r"\braise\b|\bthrow\b",              # raised/thrown errors
+    r"\byield\b",                        # generators
+    r"@\w+\s*\(",                        # decorators
+)]
 
 
 class ChangeComplexityAnalyzer:
-    """Analyze git diffs to determine test execution complexity."""
+    """Assess change complexity from a git diff (simple vs complex)."""
 
-    # Simple change patterns (low risk, Haiku can test)
-    SIMPLE_PATTERNS = [
-        r"^\s*\w+\s*=\s*\w+\s*$",  # Variable assignment
-        r"rename\s+\w+\s+to\s+\w+",  # Rename variable/constant
-        r"fix\s+typo|correct\s+spelling",  # Typo fixes
-        r"update\s+(comment|docstring)",  # Comment updates
-        r"^\s*#.*$",  # Comment-only lines
-        r"^\s*\+\s*$|^\s*-\s*$",  # Whitespace changes
-    ]
-
-    # Complex change patterns (high risk, Sonnet should test)
-    COMPLEX_PATTERNS = [
-        r"class\s+\w+",  # New class
-        r"def\s+\w+",  # New function
-        r"async\s+def",  # Async function
-        r"import\s+\w+",  # New import
-        r"if\s+.*:",  # Conditional logic
-        r"for\s+.*in",  # Loop
-        r"while\s+",  # While loop
-        r"try:|except|finally:",  # Exception handling
-        r"lambda",  # Lambda functions
-        r"\[.*for.*in.*\]",  # List comprehension
-        r"\{.*:.*for.*in.*\}",  # Dict comprehension
-        r"raise\s+\w+",  # Exceptions raised
-        r"yield",  # Generators
-        r"@\w+\s*\(",  # Decorators
-    ]
+    _MAX_DIFF_LINES = 4000   # cap lines scanned on huge diffs
+    _MAX_LINE_LEN = 500      # cap chars scanned per line (constructs appear early)
+    _SIMPLE_LINE_LIMIT = 5   # <= this many changed lines + no constructs = simple
 
     @staticmethod
     def get_diff(repo_path: str, base_sha: str = "HEAD^") -> str:
-        """Get git diff from base to HEAD.
-
-        Args:
-            repo_path: path to git repo
-            base_sha: base commit to diff from (default: parent of HEAD)
-
-        Returns:
-            diff output or empty string if no diff
-        """
+        """`git diff base_sha HEAD`. Returns "" on any failure (never raises)."""
         try:
             result = subprocess.run(
                 ["git", "-C", repo_path, "diff", base_sha, "HEAD"],
-                capture_output=True, text=True, timeout=10
+                capture_output=True, text=True, timeout=10,
             )
             return result.stdout if result.returncode == 0 else ""
         except Exception as e:
@@ -74,79 +67,43 @@ class ChangeComplexityAnalyzer:
             return ""
 
     @staticmethod
-    def analyze_diff(diff_output: str) -> ChangeComplexity:
-        """Analyze diff to determine change complexity.
+    def _changed_lines(diff_output: str) -> list[str]:
+        """The actually-changed (+/-) code lines, marker stripped and bounded.
 
-        Simple changes:
-        - Only variable/constant changes
-        - Typo fixes
-        - Comment updates
-        - Whitespace-only changes
-        - 1-5 lines changed
-
-        Complex changes:
-        - New classes, functions, methods
-        - Logic changes (if/for/while/try)
-        - New imports
-        - Loops, comprehensions, generators
-        - Exception handling
-        - 10+ lines changed
-
-        Args:
-            diff_output: git diff output
-
-        Returns:
-            ChangeComplexity.SIMPLE or ChangeComplexity.COMPLEX
+        Excludes diff headers (+++/---) and unchanged context lines, which would
+        otherwise falsely trip the complex patterns.
         """
-        if not diff_output.strip():
-            logger.debug("No changes detected → Simple (no tests needed)")
+        out: list[str] = []
+        for line in diff_output.split("\n")[:ChangeComplexityAnalyzer._MAX_DIFF_LINES]:
+            if line[:1] in ("+", "-") and not line.startswith(("+++", "---")):
+                out.append(line[1:1 + ChangeComplexityAnalyzer._MAX_LINE_LEN])
+        return out
+
+    @staticmethod
+    def analyze_diff(diff_output: str) -> ChangeComplexity:
+        """Classify the change as SIMPLE or COMPLEX.
+
+        Robust by construction: bounded line count and line length, scans only
+        the changed lines, and never raises — any unexpected error defaults to
+        COMPLEX so the heuristic can never break the pipeline.
+        """
+        if not diff_output or not diff_output.strip():
             return ChangeComplexity.SIMPLE
-
-        lines = diff_output.split("\n")
-        added_lines = [l for l in lines if l.startswith("+") and not l.startswith("+++")]
-        removed_lines = [l for l in lines if l.startswith("-") and not l.startswith("---")]
-
-        # Changed lines count (minus metadata lines)
-        changed_count = len(added_lines) + len(removed_lines)
-
-        # Check for complex patterns in the diff
-        diff_text = diff_output.lower()
-
-        complex_pattern_found = any(
-            re.search(pattern, diff_text, re.MULTILINE)
-            for pattern in ChangeComplexityAnalyzer.COMPLEX_PATTERNS
-        )
-
-        simple_pattern_found = all(
-            any(re.search(pattern, line) for pattern in ChangeComplexityAnalyzer.SIMPLE_PATTERNS)
-            for line in added_lines + removed_lines
-            if line.strip() and not line.startswith("+++") and not line.startswith("---")
-        ) if added_lines or removed_lines else False
-
-        # Decision logic
-        if complex_pattern_found:
-            logger.debug(
-                f"Complex patterns detected in diff ({changed_count} lines) "
-                "→ routing to Sonnet"
-            )
+        try:
+            changed = ChangeComplexityAnalyzer._changed_lines(diff_output)
+            if not changed:
+                return ChangeComplexity.SIMPLE
+            text = "\n".join(changed)
+            if any(p.search(text) for p in _COMPLEX_PATTERNS):
+                return ChangeComplexity.COMPLEX
+            if len(changed) <= ChangeComplexityAnalyzer._SIMPLE_LINE_LIMIT:
+                return ChangeComplexity.SIMPLE
+            # Larger change with no obvious construct: be conservative.
             return ChangeComplexity.COMPLEX
-
-        if changed_count <= 5 and not any(
-            re.search(r"def\s+\w+|class\s+\w+|import\s+\w+", diff_text)
-            for pattern in [r"def\s+\w+", r"class\s+\w+", r"import\s+\w+"]
-        ):
-            logger.debug(
-                f"Simple changes only ({changed_count} lines) "
-                "→ routing to Haiku"
-            )
-            return ChangeComplexity.SIMPLE
-
-        # Default to Sonnet for safety on larger/uncertain changes
-        logger.debug(
-            f"Unable to determine complexity ({changed_count} lines, "
-            "conservative routing) → Sonnet"
-        )
-        return ChangeComplexity.COMPLEX
+        except Exception as e:
+            logger.warning(
+                "Change-complexity analysis failed (%s); assuming complex.", e)
+            return ChangeComplexity.COMPLEX
 
     @staticmethod
     def assess_complexity(diff_output: str) -> str:
