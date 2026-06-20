@@ -362,7 +362,7 @@ async def get_agent_health() -> dict[str, Any]:
 
     return {
         "agents": ui_status,
-        "fallback_chains": fallback.FALLBACK_CHAINS,
+        "fallback_chains": fallback.effective_chains(),
     }
 
 

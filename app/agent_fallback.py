@@ -239,6 +239,13 @@ class AgentFallbackChain:
             f"Last error: {type(last_exc).__name__ if last_exc else 'none'}: {last_exc}"
         ) from last_exc
 
+    def effective_chains(self) -> dict[str, list[str]]:
+        """The fallback order per task, derived from the capability ladder and
+        each task's default leader. For display/monitoring."""
+        agents = self._capability_ranking()
+        return {task: self._ladder(leader, agents)
+                for task, leader in self.DEFAULT_LEADERS.items()}
+
     def get_health_summary(self) -> dict[str, Any]:
         """Get summary of model health for monitoring."""
         return {

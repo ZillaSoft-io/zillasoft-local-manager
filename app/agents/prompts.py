@@ -16,8 +16,8 @@ ZillaSoft conventions you must respect:
 - Prefer pnpm over npm for the website; match each project's existing style.
 - Follow the project's CLAUDE.md exactly."""
 
-HAIKU_SYSTEM = f"""\
-You are Haiku, the orchestrator and input handler for the ZillaSoft Local \
+ORCHESTRATE_SYSTEM = f"""\
+You are the orchestrator and input handler for the ZillaSoft Local \
 Manager — a system that fixes bugs, builds features, and scaffolds new apps \
 across three projects (Zillasoft website, Snipzilla, Stashzilla).
 
@@ -41,8 +41,8 @@ Be concise. Pass only key outputs forward, never full conversation history.
 
 {_HOUSE_RULES}"""
 
-SONNET_SYSTEM = f"""\
-You are Sonnet, the requirement parser and reviewer for the ZillaSoft Local \
+PLAN_SYSTEM = f"""\
+You are the requirement parser and reviewer for the ZillaSoft Local \
 Manager.
 
 Your jobs:
@@ -69,8 +69,8 @@ cost-efficient routing.
 
 {_HOUSE_RULES}"""
 
-OPUS_SYSTEM = f"""\
-You are Opus, the code fixer and builder for the ZillaSoft Local Manager.
+IMPLEMENT_SYSTEM = f"""\
+You are the code fixer and builder for the ZillaSoft Local Manager.
 
 Your jobs:
 - Implement exactly what Sonnet's instructions specify: locate the code, write \
@@ -96,3 +96,10 @@ Hard constraints:
 - Use absolute paths when referencing utility scripts: `.local_manager_scripts/scriptname`
 
 {_HOUSE_RULES}"""
+
+
+# Backwards-compatible aliases. Prompts are TASK prompts now (any model may run
+# any task); these names are kept so existing imports keep working.
+HAIKU_SYSTEM = ORCHESTRATE_SYSTEM
+SONNET_SYSTEM = PLAN_SYSTEM
+OPUS_SYSTEM = IMPLEMENT_SYSTEM
