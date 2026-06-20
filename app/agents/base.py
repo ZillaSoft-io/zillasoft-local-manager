@@ -43,6 +43,7 @@ class ClarifyTurn:
     monthly_cap: float = 0.0
     recommended_stack: str = ""
     app_name: str = ""
+    task_type: str = ""    # detected: bug_fix | feature | new_app
 
 
 @dataclass
@@ -89,9 +90,11 @@ _CLARIFY_SCHEMA = {
         "monthly_cap": {"type": "number"},
         "recommended_stack": {"type": "string"},
         "app_name": {"type": "string"},
+        "task_type": {"type": "string",
+                      "enum": ["bug_fix", "feature", "new_app", ""]},
     },
     "required": ["status", "message", "context_summary", "scope_level",
-                 "monthly_cap", "recommended_stack", "app_name"],
+                 "monthly_cap", "recommended_stack", "app_name", "task_type"],
     "additionalProperties": False,
 }
 
@@ -338,6 +341,7 @@ class Agent:
             monthly_cap=float(data.get("monthly_cap", 0) or 0),
             recommended_stack=str(data.get("recommended_stack", "")),
             app_name=str(data.get("app_name", "")),
+            task_type=str(data.get("task_type", "")),
         )
 
     # ------------------------------------------------------------------ #

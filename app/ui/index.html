@@ -162,23 +162,21 @@ function newTask(){
   S.sel=null; renderSidebar();
   document.getElementById('main').innerHTML = `
    <div class="card"><h3>New Task</h3>
-    <div class="field"><label>Type</label>
-      <select id="nt-type" onchange="ntProj()">
-        <option value="bug_fix">Bug fix</option><option value="feature">Feature</option>
-        <option value="new_app">New app</option></select></div>
-    <div class="field" id="nt-proj-row"><label>Project</label>
-      <select id="nt-proj"><option>website</option><option>snipzilla</option>
-        <option>stashzilla</option></select></div>
+    <div class="field"><label>Project</label>
+      <select id="nt-proj"><option value="website">website</option>
+        <option value="snipzilla">snipzilla</option>
+        <option value="stashzilla">stashzilla</option>
+        <option value="__new__">New app (from scratch)</option></select></div>
     <div class="field" style="align-items:flex-start"><label>Describe it</label>
-      <textarea id="nt-msg" rows="3" placeholder="What do you want done?"></textarea></div>
+      <textarea id="nt-msg" rows="3" placeholder="Describe the bug, feature, or app — Haiku figures out the type."></textarea></div>
     <button class="primary" onclick="startTask()">Start →</button>
    </div>`;
 }
-function ntProj(){ document.getElementById('nt-proj-row').style.display =
-  document.getElementById('nt-type').value==='new_app'?'none':'flex'; }
 async function startTask(){
-  const type=document.getElementById('nt-type').value;
-  const proj=type==='new_app'?null:document.getElementById('nt-proj').value;
+  const projSel=document.getElementById('nt-proj').value;
+  const isNew = projSel==='__new__';
+  const type = isNew ? 'new_app' : 'auto';   // auto = Haiku detects bug_fix vs feature
+  const proj = isNew ? null : projSel;
   const msg=document.getElementById('nt-msg').value.trim();
   const res = await api('/api/input/sessions',{method:'POST',
     body:JSON.stringify({task_type:type,project:proj,message:msg||undefined})});

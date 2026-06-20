@@ -47,7 +47,8 @@ class ConversationManager:
     # ------------------------------------------------------------------ #
     def create_session(self, task_type: str,
                        project: Optional[str] = None) -> str:
-        if task_type not in TASK_TYPES:
+        # "auto" lets Haiku detect bug_fix vs feature from the description.
+        if task_type not in TASK_TYPES and task_type != "auto":
             raise ValueError(f"Invalid task_type {task_type!r}")
         return self.db.create_session(
             task_type=task_type, project=project, input_source="manual")
@@ -69,6 +70,12 @@ class ConversationManager:
         turn = self.haiku.clarify(clarify_instructions=instr,
                                   messages=api_messages)
         self.db.add_message(session_id, "assistant", turn.message)
+
+        # Auto-detected task type: persist it as Haiku firms it up, so later
+        # turns use the right checklist and the pipeline sees the real type.
+        if turn.task_type in TASK_TYPES and turn.task_type != session.get("task_type"):
+            self.db.update_session(session_id, task_type=turn.task_type)
+            session["task_type"] = turn.task_type
 
         if turn.status == "ready":
             self._finalize(session, turn)
@@ -155,6 +162,12 @@ class ConversationManager:
     # ------------------------------------------------------------------ #
     def _finalize(self, session: dict, turn: ClarifyTurn) -> None:
         sid = session["id"]
+        # Make sure an auto session ends with a concrete task type (default to
+        # feature if Haiku somehow never resolved it).
+        if session.get("task_type") not in TASK_TYPES:
+            resolved = turn.task_type if turn.task_type in TASK_TYPES else "feature"
+            self.db.update_session(sid, task_type=resolved)
+            session["task_type"] = resolved
         self.db.update_session(
             sid,
             scope_level=turn.scope_level or None,

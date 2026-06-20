@@ -63,11 +63,34 @@ or "uncapped" and `monthly_cap` accordingly (0 if uncapped).
 {fields}"""
 
 
+_AUTO_HEADER = """\
+First, DETERMINE the task type from Mario's description and set `task_type`:
+- "bug_fix": something is broken / wrong / not working (e.g. "there's a typo",
+  "the button doesn't work", a Sentry error).
+- "feature": adding new behavior / capability (e.g. "add a dark mode toggle").
+- "new_app": building a brand-new application from scratch.
+Re-evaluate it each turn as you learn more. Then gather requirements for that
+type using the relevant checklist below.
+
+"""
+
+
 def clarify_instructions(task_type: str,
                         external_context: str = "") -> str:
-    """Build the system-prompt addendum for one clarification session."""
-    fields = _FIELDS.get(task_type, _FEATURE_FIELDS)
-    text = _BASE.format(task_type=task_type, fields=fields)
+    """Build the system-prompt addendum for one clarification session.
+
+    When task_type is "auto" (or unknown), Haiku determines the type itself and
+    reports it in `task_type`; otherwise the known type drives the checklist.
+    """
+    if task_type == "auto" or task_type not in _FIELDS:
+        # Auto-detect: let Haiku classify, and give it every checklist.
+        fields = (_AUTO_HEADER + _BUG_FIELDS + "\n\n" + _FEATURE_FIELDS
+                  + "\n\n" + _NEW_APP_FIELDS)
+        text = _BASE.format(task_type="(determine it yourself)", fields=fields)
+    else:
+        fields = _FIELDS[task_type]
+        text = _BASE.format(task_type=task_type, fields=fields)
+        text += f"\n\nThe task type is already known: set task_type=\"{task_type}\"."
     if external_context:
         text += ("\n\nFetched context from Sentry/Jira (use this, don't ask "
                  "Mario to repeat it):\n" + external_context)
