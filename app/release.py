@@ -108,6 +108,32 @@ class ReleaseManager:
         logger.info("Session %s rejected.", session_id)
         return {"status": "rejected"}
 
+    def prepare_retry(self, session_id: str, *, notes: str) -> dict:
+        """Reject the current attempt but queue a fresh run that incorporates
+        Mario's feedback. Discards the rejected commits (reset to base), appends
+        the feedback to the session context, and clears the stored plan so
+        planning re-runs WITH the feedback (rather than reusing the old plan)."""
+        session = self._require(session_id)
+        project = session.get("project")
+        base = self._deployment(session).get("base_sha")
+        if project and base:
+            git, *_ = self._repo_cfg(project)
+            git.reset_hard(base)   # discard the rejected attempt's commits
+        ctx = session.get("haiku_context") or {}
+        summary = (ctx.get("summary") or "").strip()
+        ctx["summary"] = (
+            summary + "\n\nIMPORTANT — a previous attempt was REJECTED. Address "
+            f"this feedback before anything else: {notes.strip()}")
+        # Clear the stored plan so the planning phase re-runs with the feedback.
+        self._db.update_session(session_id, haiku_context=ctx,
+                                sonnet_instructions={}, status="in_progress")
+        self._audit.update(
+            session_id, project,
+            {"mario_review": {"approved": False, "retry": True, "notes": notes}})
+        logger.info("Session %s rejected with feedback; queued for retry.",
+                    session_id)
+        return {"status": "retrying"}
+
     def rollback(self, session_id: str, *, push_url: Optional[str] = None) -> dict:
         session = self._require(session_id)
         project = session.get("project")

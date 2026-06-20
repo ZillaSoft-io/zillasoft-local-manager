@@ -27,6 +27,7 @@ from .. import main as _main  # noqa: E402
 
 class ReviewBody(BaseModel):
     notes: str = ""
+    retry: bool = False   # reject + re-run with the notes as feedback
 
 
 def _rel():
@@ -58,6 +59,15 @@ async def approve(session_id: str, body: ReviewBody):
 
 @router.post("/sessions/{session_id}/reject")
 async def reject(session_id: str, body: ReviewBody):
+    if body.retry and body.notes.strip():
+        # Reject this attempt and re-run the pipeline with the feedback.
+        result = _guarded(lambda: _rel().prepare_retry(session_id, notes=body.notes))
+        import threading
+        from .pipeline import _safe_run, _threads
+        t = threading.Thread(target=_safe_run, args=(session_id,), daemon=True)
+        _threads[session_id] = t
+        t.start()
+        return result
     return _guarded(lambda: _rel().reject(session_id, notes=body.notes))
 
 

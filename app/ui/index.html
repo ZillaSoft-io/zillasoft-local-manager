@@ -262,7 +262,12 @@ const doPause=()=>act('/api/sessions/'+S.sel.id+'/pause',{});
 const doResume=()=>act('/api/sessions/'+S.sel.id+'/resume');
 const doApprove=()=>confirm('Approve and push to GitHub?')&&
   act('/api/sessions/'+S.sel.id+'/approve',{});
-const doReject=()=>act('/api/sessions/'+S.sel.id+'/reject',{});
+const doReject=()=>{
+  const fb=prompt('Reject this attempt.\n\nEnter feedback to retry with corrections, or leave blank to just discard:');
+  if(fb===null) return;  // cancelled
+  const body = fb.trim() ? {notes:fb.trim(), retry:true} : {};
+  act('/api/sessions/'+S.sel.id+'/reject', body);
+};
 const doRollback=()=>confirm('Revert the pushed commit?')&&
   act('/api/sessions/'+S.sel.id+'/rollback');
 const doCreateRepo=()=>act('/api/sessions/'+S.sel.id+'/create-repo');
