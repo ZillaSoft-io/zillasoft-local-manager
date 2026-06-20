@@ -9,12 +9,13 @@ from __future__ import annotations
 
 from ..agents.usage import Usage
 
-# model-name substring -> (input $/1M, output $/1M)
+# model-name substring -> (input $/1M, output $/1M). Standard Anthropic list
+# pricing; adjust if your account has custom/volume rates.
 PRICING = {
-    "haiku": (1.0, 5.0),
-    "sonnet": (3.0, 15.0),
-    "opus": (5.0, 25.0),
-    "fable": (10.0, 50.0),
+    "haiku": (1.0, 5.0),     # Haiku 4.5
+    "sonnet": (3.0, 15.0),   # Sonnet 4.x
+    "opus": (15.0, 75.0),    # Opus 4.x ($15/$75, was wrongly $5/$25)
+    "fable": (10.0, 50.0),   # Fable 5 (verify against your account)
 }
 
 _CACHE_WRITE_MULT = 1.25

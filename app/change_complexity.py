@@ -1,7 +1,8 @@
-"""Analyze code changes to route test execution to Haiku or Sonnet.
+"""Assess how complex a code change is, from its git diff.
 
-Simple changes (variable renames, typo fixes) → Haiku runs tests
-Complex changes (new features, logic rewrite) → Sonnet runs tests
+Tests are run by the executor (a shell command), not by an agent, so this does
+NOT pick a "test runner". It produces a simple/complex signal that drives how
+much effort the review step spends (deeper review for complex changes).
 """
 from __future__ import annotations
 
@@ -148,25 +149,10 @@ class ChangeComplexityAnalyzer:
         return ChangeComplexity.COMPLEX
 
     @staticmethod
-    def get_test_runner(diff_output: str, haiku, sonnet):
-        """Get the appropriate test runner based on change complexity.
-
-        Args:
-            diff_output: git diff output
-            haiku: Haiku agent instance
-            sonnet: Sonnet agent instance
-
-        Returns:
-            Agent instance (haiku or sonnet) to run tests
-        """
+    def assess_complexity(diff_output: str) -> str:
+        """Classify the change as 'simple' or 'complex' (drives review depth)."""
         complexity = ChangeComplexityAnalyzer.analyze_diff(diff_output)
-
-        if complexity == ChangeComplexity.SIMPLE:
-            logger.info("Routing test execution to Haiku (simple change)")
-            return haiku
-        else:
-            logger.info("Routing test execution to Sonnet (complex change)")
-            return sonnet
+        return "simple" if complexity == ChangeComplexity.SIMPLE else "complex"
 
 
 # Global analyzer instance

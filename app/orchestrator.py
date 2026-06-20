@@ -118,7 +118,9 @@ class Orchestrator:
         self._audit.update(session_id, project, {"preflight": pf.as_dict()})
 
         # Capture the base SHA so a later reject can discard the session's
-        # local commits (reset --hard back to here).
+        # local commits (reset --hard back to here). Also used as the diff base
+        # for the change-complexity assessment in the cycle loop.
+        base_sha = None
         if task_type != "new_app" and repo_path:
             base_sha = GitOps(repo_path, self._executor).head_sha()
             if base_sha:
@@ -262,16 +264,17 @@ class Orchestrator:
                      "opus_commit": opus_result.last_commit_sha}
                 )
 
-                # Intelligent test routing: analyze what changed to decide who runs tests
+                # Assess how complex this session's change is (diff from the
+                # session base, where the work started, to HEAD). Drives the
+                # review depth below. Falls back to HEAD^ if we have no base.
                 change_analyzer = get_change_analyzer()
-                diff = change_analyzer.get_diff(repo_path, opus_result.last_commit_sha)
-                test_runner = change_analyzer.get_test_runner(diff, haiku, sonnet)
-                test_runner_name = "haiku" if test_runner == haiku else "sonnet"
+                diff = change_analyzer.get_diff(repo_path, base_sha or "HEAD^")
+                change_complexity = change_analyzer.assess_complexity(diff)
 
                 # The final test run is short — not cancellable (the cancellable
                 # unit is Opus's bash loop, checked above and between its steps).
                 # UI 4: Track test timing
-                test_step = cycle_timeline.add_step("test_run", test_runner_name)
+                test_step = cycle_timeline.add_step("test_run", "tests")
                 test_result = run_tests(self._executor, repo_path, test_command)
                 test_step.complete()
 
@@ -293,7 +296,7 @@ class Orchestrator:
                 review_effort = effort_router.analyze_task_complexity(
                     task_type="test_review",
                     has_failures=not test_result.ok,
-                    change_complexity="simple" if test_runner_name == "haiku" else "complex"
+                    change_complexity=change_complexity,
                 )
                 effort_config = effort_router.get_effort_config(review_effort)
 
@@ -332,7 +335,7 @@ class Orchestrator:
                     logger.error(f"All agents failed for test review: {e}")
                     raise
                 logger.info(
-                    f"Tests run by {test_runner_name}, "
+                    f"Change assessed {change_complexity}, "
                     f"reviewed by {review_agent_name} ({review_effort.value} effort)"
                 )
 
@@ -348,7 +351,7 @@ class Orchestrator:
                              "steps": opus_result.steps,
                              "commit_sha": opus_result.last_commit_sha},
                     "testing": {
-                        "runner": test_runner_name,
+                        "change_complexity": change_complexity,
                         "reviewer": review_agent_name,
                         "review_effort": review_effort.value,
                         "thinking_budget_tokens": effort_config["thinking_budget_tokens"],
@@ -365,7 +368,7 @@ class Orchestrator:
                     opus_changes={"commands": opus_result.commands,
                                   "commit_sha": opus_result.last_commit_sha},
                     sonnet_review={
-                        "runner": test_runner_name,
+                        "change_complexity": change_complexity,
                         "reviewer": review_agent_name,
                         "review_effort": review_effort.value,
                         "thinking_budget_tokens": effort_config["thinking_budget_tokens"],
