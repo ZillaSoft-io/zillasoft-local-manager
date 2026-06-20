@@ -16,6 +16,7 @@ from typing import Any, Optional
 from ..agents.haiku import ClarifyTurn, HaikuAgent
 from ..integrations import JiraClient, JiraError, SentryClient, SentryError
 from .attachments import AttachmentStore
+from .sanitize import sanitize_external
 from .task_types import TASK_TYPES, clarify_instructions
 
 logger = logging.getLogger(__name__)
@@ -114,7 +115,9 @@ class ConversationManager:
         lines = [f"[EXTERNAL CONTEXT — {source.upper()}]"]
         for k, v in summary.items():
             if v:
-                lines.append(f"{k}: {v}")
+                # External text is attacker-influenceable -> sanitize before it
+                # ever reaches an agent (defuses prompt injection).
+                lines.append(f"{k}: {sanitize_external(v)}")
         self.db.add_message(sid, "system", "\n".join(lines))
         existing = session.get("input_ref") or ""
         new_ref = (existing + " " + marker).strip()

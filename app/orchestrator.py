@@ -135,16 +135,23 @@ class Orchestrator:
         # Assess complexity + effort up front (from the compiled context), so the
         # same effort signal can also scale the PLANNING depth (not just the
         # coder). complexity -> implementation agent, effort -> planning + coding.
-        impl_preferred, impl_effort = self._select_impl_agent(haiku, ctx, "")
+        impl_preferred, impl_effort, complexity = self._select_impl_agent(haiku, ctx, "")
 
-        # Resume: if a previous run already produced a validated plan (stored in
-        # sonnet_instructions), reuse it and SKIP the whole planning phase
-        # (plan + up to N validation rounds + instructions) — the expensive
-        # upfront LLM work. The implementation cycle still runs fresh, because a
-        # half-finished agentic edit can't be safely continued; prior local
-        # commits are preserved in git.
+        # Fast path for clearly-trivial changes (typo, copy, config value): skip
+        # the whole plan -> validate -> instructions ceremony and go straight to a
+        # cheap-model edit. The cycle loop (implement -> test -> review) and the
+        # approval gate still run, so safety is unchanged. Off via
+        # LOCAL_MANAGER_FAST_PATH_TRIVIAL=false. New apps never fast-path.
+        fast_path = (
+            complexity == "low" and task_type != "new_app"
+            and self._config.get_raw(
+                "LOCAL_MANAGER_FAST_PATH_TRIVIAL", "true").lower() == "true")
+
         stored = session.get("sonnet_instructions") or {}
         if stored.get("approved") and stored.get("plan"):
+            # Resume: reuse a previously validated plan and SKIP planning. The
+            # implementation cycle still runs fresh; prior local commits are
+            # preserved in git (a half-finished agentic edit can't be continued).
             logger.info("Resuming %s: reusing stored plan, skipping planning phase.",
                         session_id)
             dr = Phase2Result(
@@ -153,6 +160,21 @@ class Orchestrator:
                 implementation=stored.get("instructions", ""),
                 approved=True, rounds=0, cost_breakdown=None,
                 success=True, error="")
+        elif fast_path:
+            logger.info("Fast path: trivial change (low complexity) — "
+                        "skipping planning phase for %s.", session_id)
+            dr = Phase2Result(
+                plan="(fast path: trivial change — planning skipped)",
+                routing_decision=impl_preferred,
+                implementation=(
+                    "Make this small, localized change. Keep it minimal and "
+                    "focused — do not refactor or touch unrelated code:\n\n" + ctx),
+                approved=True, rounds=0, cost_breakdown=None,
+                success=True, error="")
+            # Persist so a resume reuses it instead of re-planning.
+            self._db.update_session(session_id, sonnet_instructions={
+                "plan": dr.plan, "instructions": dr.implementation,
+                "approved": True, "routing_decision": dr.routing_decision})
         else:
             cache = SessionCache()
             with self._observability.tracer.span("phase2_orchestration", project=project, task_type=task_type):
@@ -499,7 +521,7 @@ class Orchestrator:
 
         Always safe: if routing is disabled or classification fails, returns the
         configured implementation agent and no effort override (never under-
-        powers). Returns (agent_label, effort_or_None).
+        powers). Returns (agent_label, effort_or_None, complexity_or_None).
         """
         from .agents.registry import get_registry
         reg = get_registry()
@@ -508,7 +530,7 @@ class Orchestrator:
         auto = self._config.get_raw(
             "LOCAL_MANAGER_AUTO_ROUTE_IMPL", "true").lower() == "true"
         if not auto:
-            return configured, None
+            return configured, None, None
 
         try:
             complexity, effort, reason = haiku.classify_complexity(context, plan)
@@ -521,12 +543,12 @@ class Orchestrator:
             logger.info(
                 "Implementation routing: complexity=%s -> %s, effort=%s (%s)",
                 complexity, agent, effort, reason)
-            return agent, effort
+            return agent, effort, complexity
         except Exception as e:
             logger.warning(
                 "Complexity routing failed (%s); using configured agent '%s'.",
                 e, configured)
-            return configured, None
+            return configured, None, None
 
     # ------------------------------------------------------------------ #
     # Outcomes
