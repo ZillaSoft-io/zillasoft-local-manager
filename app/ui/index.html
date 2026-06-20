@@ -274,7 +274,6 @@ async function openSettings(){
     <div style="display:flex;gap:12px;margin-bottom:16px;border-bottom:1px solid var(--border);padding-bottom:12px">
       <button class="tab-btn sel" data-tab="budget" onclick="switchTab('budget')">💰 Budget</button>
       <button class="tab-btn" data-tab="agents" onclick="switchTab('agents')">🤖 Agents</button>
-      <button class="tab-btn" data-tab="ml" onclick="switchTab('ml')">📈 ML Router</button>
       <button class="tab-btn" data-tab="feedback" onclick="switchTab('feedback')">🔄 Feedback</button>
       <button class="tab-btn" data-tab="monitor" onclick="switchTab('monitor')">📊 Monitor</button>
       <button class="tab-btn" data-tab="recovery" onclick="switchTab('recovery')">🔧 Recovery</button>
@@ -301,7 +300,6 @@ async function switchTab(tab){
   try {
     if(tab==='budget') await loadBudgetTab(content);
     else if(tab==='agents') await loadAgentsTab(content);
-    else if(tab==='ml') await loadMLTab(content);
     else if(tab==='feedback') await loadFeedbackTab(content);
     else if(tab==='monitor') await loadMonitorTab(content);
     else if(tab==='recovery') await loadRecoveryTab(content);
@@ -372,36 +370,6 @@ async function saveAgents(){
   alert('Agents updated ✓');
 }
 
-async function loadMLTab(el){
-  const data = await api('/api/settings/ml-router');
-  const stats = await api('/api/settings/ml-router/stats');
-  el.innerHTML = `
-    <div class="card">
-      <h3>ML Router Learning</h3>
-      <p class="muted">Automatically learns which agents work best for each project.</p>
-      <div style="margin:12px 0;padding:12px;background:var(--surface2);border-radius:8px">
-        <p style="margin:0;font-size:12px">Projects with history: <b>${stats.projects_with_history||0}</b></p>
-        <p style="margin:8px 0 0;font-size:12px">Total tasks learned: <b>${stats.total_tasks_recorded||0}</b></p>
-      </div>
-      <div style="margin:12px 0;max-height:300px;overflow:auto;font-size:12px">
-        ${Object.entries(stats.projects||{}).map(([proj,data])=>`
-          <div style="padding:8px;border:1px solid var(--border);margin-bottom:8px;border-radius:6px">
-            <p style="margin:0"><b>${proj}</b> → ${data.best_agent}</p>
-            <p style="margin:4px 0 0;color:var(--muted);font-size:11px">
-              ${Object.entries(data.agents).map(([a,s])=>`${a}: ${s.success_rate} (${s.tasks} tasks)`).join(' · ')}
-            </p>
-          </div>
-        `).join('')}
-      </div>
-      <button class="primary" onclick="flushMLRouter()">Force Save Stats</button>
-    </div>`;
-}
-
-async function flushMLRouter(){
-  const ml = await api('/api/settings/ml-router/stats');
-  alert('ML router stats saved to disk ✓');
-}
-
 async function loadFeedbackTab(el){
   const data = await api('/api/settings/feedback-loop');
   const patterns = await api('/api/settings/feedback-loop/patterns');
@@ -465,8 +433,7 @@ async function loadMonitorTab(el){
         </div>
       </div>
       <div style="margin:16px 0;padding:12px;background:var(--surface2);border-radius:8px">
-        <p style="margin:0;font-size:12px;color:var(--muted)">Projects learning: <b>${mon.ml_projects_with_history}</b></p>
-        <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Failure patterns: <b>${mon.failure_patterns_tracked}</b></p>
+        <p style="margin:0;font-size:12px;color:var(--muted)">Failure patterns: <b>${mon.failure_patterns_tracked}</b></p>
         <p style="margin:8px 0 0;font-size:12px;color:var(--muted)">Cache hit rate: <b>${(mon.cache_hit_rate*100).toFixed(1)}%</b></p>
       </div>
       <p class="muted" style="font-size:12px">Metrics update every 4 seconds.</p>

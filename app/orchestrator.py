@@ -27,7 +27,6 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .agents.phase2_orchestration import run_phase2_orchestration
-from .agents.ml_routing import get_ml_router
 from .agent_fallback import get_fallback_chain
 from .cache import SessionCache
 from .change_complexity import get_change_analyzer
@@ -66,7 +65,6 @@ class Orchestrator:
         self._provisioner = provisioner
         self._run_existing_tests = run_existing_tests
         # Phase 3 managers
-        self._ml_router = get_ml_router()
         self._persistent_cache = get_persistent_cache()
         self._observability = get_observability()
         self._feedback_loop = get_feedback_loop()
@@ -533,17 +531,6 @@ class Orchestrator:
         session_id = session["id"]
         report = self._record_cost(session_id, project, tracker)
 
-        # Phase 3: Record success to ML router (learns which agent works best)
-        if project and session.get("routing_decision"):
-            agent = session.get("routing_decision")
-            self._ml_router.record_task(
-                project=project,
-                agent=agent,
-                success=True,
-                cost_usd=report.total,
-                duration_ms=0,  # Would need start time to calculate
-            )
-
         # New apps: auto-configure (.env section + setup log) on success.
         setup_log = None
         if session.get("task_type") == "new_app" and self._provisioner:
@@ -576,18 +563,6 @@ class Orchestrator:
             escalation_msg = build_escalation_reason(reason, context)
         else:
             escalation_msg = reason or "Escalation required"
-
-        # Phase 3: Record failure to ML router (learns which agent works best)
-        session = self._db.get_session(session_id)
-        if session and project and session.get("routing_decision"):
-            agent = session.get("routing_decision")
-            self._ml_router.record_task(
-                project=project,
-                agent=agent,
-                success=False,
-                cost_usd=report.total,
-                duration_ms=0,
-            )
 
         self._db.update_session(session_id, status="failed",
                                 error_message=escalation_msg)

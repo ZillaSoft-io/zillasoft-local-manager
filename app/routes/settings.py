@@ -12,7 +12,6 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from ..agent_fallback import get_fallback_chain
-from ..agents.ml_routing import get_ml_router
 from ..agents.registry import get_registry
 from ..cost.budgeting import BudgetManager
 from ..cycle_timeline import get_session_timelines
@@ -48,12 +47,6 @@ class AgentSettings(BaseModel):
     implementation_agent: str
 
 
-class MLRouterSettings(BaseModel):
-    """ML router configuration."""
-    enabled: bool
-    learning_projects: list[str]  # projects to learn from
-
-
 class FeedbackLoopSettings(BaseModel):
     """Feedback loop configuration."""
     enabled: bool
@@ -67,7 +60,6 @@ class MonitoringData(BaseModel):
     budget_remaining: float
     budget_percent_used: float
     cache_hit_rate: float
-    ml_projects_with_history: int
     failure_patterns_tracked: int
 
 
@@ -168,39 +160,6 @@ async def list_available_agents() -> dict[str, list[str]]:
 # ML router endpoints
 # ============================================================================
 
-@router.get("/ml-router")
-async def get_ml_router_settings() -> MLRouterSettings:
-    """Get ML router configuration."""
-    ml_router = get_ml_router()
-    summary = ml_router.summary()
-
-    return MLRouterSettings(
-        enabled=True,
-        learning_projects=list(summary.get("projects", {}).keys()),
-    )
-
-
-@router.post("/ml-router/enable")
-async def enable_ml_router() -> dict[str, Any]:
-    """Enable ML router learning."""
-    logger.info("ML router learning enabled")
-    return {"ok": True, "enabled": True}
-
-
-@router.post("/ml-router/disable")
-async def disable_ml_router() -> dict[str, Any]:
-    """Disable ML router learning."""
-    logger.info("ML router learning disabled")
-    return {"ok": True, "enabled": False}
-
-
-@router.get("/ml-router/stats")
-async def get_ml_router_stats() -> dict[str, Any]:
-    """Get ML router statistics and learning progress."""
-    ml_router = get_ml_router()
-    return ml_router.summary()
-
-
 # ============================================================================
 # Feedback loop endpoints
 # ============================================================================
@@ -245,11 +204,8 @@ async def get_failure_patterns() -> dict[str, Any]:
 async def get_monitoring_data() -> MonitoringData:
     """Get real-time monitoring and cost data."""
     budget = _main.state.budget
-    ml_router = get_ml_router()
     feedback = get_feedback_loop()
-    obs = get_observability()
 
-    ml_summary = ml_router.summary()
     fb_summary = feedback.summary()
 
     # Calculate cost today (simplified — from budget tracker)
@@ -262,18 +218,8 @@ async def get_monitoring_data() -> MonitoringData:
         budget_remaining=max(0, budget.cap - cost_month),
         budget_percent_used=budget_percent,
         cache_hit_rate=0.0,  # Would need cache stats
-        ml_projects_with_history=ml_summary.get("projects_with_history", 0),
         failure_patterns_tracked=fb_summary.get("total_failure_patterns", 0),
     )
-
-
-@router.get("/monitoring/dashboard")
-async def get_dashboard_data() -> dict[str, Any]:
-    """Get full dashboard data (cost breakdown, success rates, cache stats)."""
-    from ..dashboards import DashboardExporter
-
-    exporter = DashboardExporter(_main.state.db, _main.state.audit)
-    return exporter.full_dashboard()
 
 
 # ============================================================================
