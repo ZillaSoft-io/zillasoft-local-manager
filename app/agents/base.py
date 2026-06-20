@@ -140,16 +140,18 @@ class Agent:
 
     def ask(self, user_content: str, *, max_tokens: int = 8000,
             thinking: bool = True, output_config: Optional[dict] = None,
-            stream: bool = False, system: Optional[str] = None) -> AgentResponse:
+            stream: bool = False, system: Optional[str] = None,
+            effort: Optional[str] = None) -> AgentResponse:
         """Single-turn call. `system` selects the TASK prompt; defaults to this
-        agent's identity prompt. Per-model `thinking`/`effort` are gated by the
+        agent's identity prompt. `effort` overrides the model's configured effort
+        (None = model default). Per-model `thinking`/`effort` are gated by the
         client, so any task is safe to run on any model."""
         return self.client.complete(
             model=self.model,
             system=system if system is not None else self.system_prompt,
             messages=[{"role": "user", "content": user_content}],
             max_tokens=max_tokens,
-            effort=self.effort,
+            effort=effort if effort is not None else self.effort,
             thinking=thinking,
             output_config=output_config,
             stream=stream,
@@ -159,14 +161,18 @@ class Agent:
     # ------------------------------------------------------------------ #
     # Planning / requirement skills (task prompt: PLAN_SYSTEM)
     # ------------------------------------------------------------------ #
-    def generate_dry_run_plan(self, context: str) -> str:
+    def generate_dry_run_plan(self, context: str,
+                              effort: Optional[str] = None) -> AgentResponse:
+        """Generate a dry-run plan. Returns the full AgentResponse (the caller,
+        plan_phase, needs usage + text). `effort` scales planning depth so a
+        trivial request doesn't get deep planning."""
         prompt = (
             "Produce a concise DRY-RUN PLAN for this task. List: files to "
             "modify/create, the logic changes and why, tests to validate, and "
             "risks/edge cases. Do not write code yet.\n\n"
             f"Task context:\n{context}"
         )
-        return self.ask(prompt, system=PLAN_SYSTEM).text
+        return self.ask(prompt, system=PLAN_SYSTEM, effort=effort)
 
     def revise_dry_run_plan(self, context: str, previous_plan: str,
                             corrections: str) -> str:

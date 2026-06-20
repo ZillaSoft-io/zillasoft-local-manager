@@ -127,6 +127,11 @@ class Orchestrator:
         # ---- Phase 2: plan + route + execute ----
         max_cycles = int(self._config.get("LOCAL_MANAGER_MAX_CYCLES", 3) or 3)
 
+        # Assess complexity + effort up front (from the compiled context), so the
+        # same effort signal can also scale the PLANNING depth (not just the
+        # coder). complexity -> implementation agent, effort -> planning + coding.
+        impl_preferred, impl_effort = self._select_impl_agent(haiku, ctx, "")
+
         # Resume: if a previous run already produced a validated plan (stored in
         # sonnet_instructions), reuse it and SKIP the whole planning phase
         # (plan + up to N validation rounds + instructions) — the expensive
@@ -155,6 +160,7 @@ class Orchestrator:
                     session_id=session_id,
                     max_rounds=max_cycles,
                     cache=cache,
+                    plan_effort=impl_effort,
                 )
 
             # Store plan, routing decision, cost breakdown
@@ -183,11 +189,8 @@ class Orchestrator:
         # reviews. The earlier execution_phase only produced draft text, so a
         # session must never be marked "done" without going through the loop.
         # `dr.implementation` seeds the first round of instructions.
+        # impl_preferred / impl_effort were computed up front (see above).
         instructions = dr.implementation or ""
-        # Pick the implementation agent (by complexity) and effort (independent),
-        # leading the fallback chain. Safe: any failure falls back to the
-        # configured agent. See _select_impl_agent.
-        impl_preferred, impl_effort = self._select_impl_agent(haiku, ctx, dr.plan)
 
         # ---- cycle loop with crash recovery ----
         recovery = get_crash_recovery()

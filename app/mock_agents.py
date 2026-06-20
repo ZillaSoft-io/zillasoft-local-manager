@@ -188,8 +188,9 @@ class MockAgent:
         """Simulate ask() call."""
         return self.complete(**kwargs)
 
-    def generate_dry_run_plan(self, context: str) -> MockAgentResponse:
-        """Simulate plan generation."""
+    def generate_dry_run_plan(self, context: str,
+                              effort: str = None) -> MockAgentResponse:
+        """Simulate plan generation (returns a response, like the real agent)."""
         recorded = self._get_next_response()
         self._apply_latency(recorded.latency_ms)
         return MockAgentResponse(

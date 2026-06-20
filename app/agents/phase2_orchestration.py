@@ -49,6 +49,7 @@ def run_phase2_orchestration(
     session_id: str,
     max_rounds: int = 3,
     cache: SessionCache | None = None,
+    plan_effort: str | None = None,
 ) -> Phase2Result:
     """Phase 2 orchestration with optimization.
 
@@ -59,6 +60,7 @@ def run_phase2_orchestration(
         session_id: for structured logging and caching
         max_rounds: max dry-run validation rounds
         cache: session cache (optional)
+        plan_effort: reasoning depth for plan generation (low/medium/high)
 
     Returns:
         Phase2Result with plan, routing decision, implementation, cost
@@ -89,7 +91,7 @@ def run_phase2_orchestration(
 
     try:
         # Phase 1: Plan generation (with circuit breaker + caching)
-        plan = orchestrator.plan_phase(context)
+        plan = orchestrator.plan_phase(context, effort=plan_effort)
         if not plan:
             result.error = "Plan generation failed"
             return result

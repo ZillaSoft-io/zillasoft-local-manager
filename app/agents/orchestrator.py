@@ -39,8 +39,10 @@ class AgentOrchestrator:
         self.cycle_num = 0
         self.circuit_breaker = get_breaker("sonnet_plan_generation")
 
-    def plan_phase(self, context: str) -> Optional[str]:
+    def plan_phase(self, context: str, effort: Optional[str] = None) -> Optional[str]:
         """Phase 1: Generate and cache plan via Sonnet.
+
+        `effort` scales the planning reasoning depth (None = model default).
 
         Returns:
             Plan text, or None if failed
@@ -64,6 +66,7 @@ class AgentOrchestrator:
             response = self.circuit_breaker.call(
                 self.sonnet.generate_dry_run_plan,
                 context,
+                effort,
             )
             # Track usage
             self.usage_tracker.record("sonnet", self.sonnet.model, response.usage)
