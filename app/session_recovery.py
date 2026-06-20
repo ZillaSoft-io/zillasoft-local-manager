@@ -92,8 +92,9 @@ class SessionRecoveryManager:
             "status": session.get("status"),
             "incomplete_at_cycle": max_incomplete,
             "last_commit": base_sha[:8],
-            "action": "Re-run session (prior git commits preserved; "
-                      "checkpoints + audit kept for troubleshooting)",
+            "action": "Re-run: reuses the validated plan (skips planning), "
+                      "re-runs the implementation cycle; prior git commits "
+                      "preserved, checkpoints + audit kept for troubleshooting",
         }
 
     def format_for_ui(self, sessions: list[dict]) -> str:

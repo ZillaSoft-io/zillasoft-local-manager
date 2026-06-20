@@ -26,7 +26,7 @@ import logging
 from pathlib import Path
 from typing import Callable, Optional
 
-from .agents.phase2_orchestration import run_phase2_orchestration
+from .agents.phase2_orchestration import run_phase2_orchestration, Phase2Result
 from .agent_fallback import get_fallback_chain
 from .cache import SessionCache
 from .change_complexity import get_change_analyzer
@@ -126,34 +126,52 @@ class Orchestrator:
 
         # ---- Phase 2: plan + route + execute ----
         max_cycles = int(self._config.get("LOCAL_MANAGER_MAX_CYCLES", 3) or 3)
-        cache = SessionCache()
-        with self._observability.tracer.span("phase2_orchestration", project=project, task_type=task_type):
-            dr = run_phase2_orchestration(
-                haiku=haiku,
-                sonnet=sonnet,
-                opus=opus,
-                context=ctx,
-                original_intent=ctx,
-                session_id=session_id,
-                max_rounds=max_cycles,
-                cache=cache,
-            )
 
-        # Store plan, routing decision, cost breakdown
-        self._db.update_session(session_id, sonnet_instructions={
-            "plan": dr.plan,
-            "instructions": dr.implementation,
-            "approved": dr.approved,
-            "routing_decision": dr.routing_decision,
-        })
+        # Resume: if a previous run already produced a validated plan (stored in
+        # sonnet_instructions), reuse it and SKIP the whole planning phase
+        # (plan + up to N validation rounds + instructions) — the expensive
+        # upfront LLM work. The implementation cycle still runs fresh, because a
+        # half-finished agentic edit can't be safely continued; prior local
+        # commits are preserved in git.
+        stored = session.get("sonnet_instructions") or {}
+        if stored.get("approved") and stored.get("plan"):
+            logger.info("Resuming %s: reusing stored plan, skipping planning phase.",
+                        session_id)
+            dr = Phase2Result(
+                plan=stored.get("plan", ""),
+                routing_decision=stored.get("routing_decision", ""),
+                implementation=stored.get("instructions", ""),
+                approved=True, rounds=0, cost_breakdown=None,
+                success=True, error="")
+        else:
+            cache = SessionCache()
+            with self._observability.tracer.span("phase2_orchestration", project=project, task_type=task_type):
+                dr = run_phase2_orchestration(
+                    haiku=haiku,
+                    sonnet=sonnet,
+                    opus=opus,
+                    context=ctx,
+                    original_intent=ctx,
+                    session_id=session_id,
+                    max_rounds=max_cycles,
+                    cache=cache,
+                )
 
-        # Store cost breakdown
-        if dr.cost_breakdown:
-            self._db.update_session(session_id,
-                cost_breakdown=dr.cost_breakdown.to_dict(),
-                total_cost=dr.cost_breakdown.total_cost_usd,
-                total_tokens_used=dr.cost_breakdown.total_tokens,
-            )
+            # Store plan, routing decision, cost breakdown
+            self._db.update_session(session_id, sonnet_instructions={
+                "plan": dr.plan,
+                "instructions": dr.implementation,
+                "approved": dr.approved,
+                "routing_decision": dr.routing_decision,
+            })
+
+            # Store cost breakdown
+            if dr.cost_breakdown:
+                self._db.update_session(session_id,
+                    cost_breakdown=dr.cost_breakdown.to_dict(),
+                    total_cost=dr.cost_breakdown.total_cost_usd,
+                    total_tokens_used=dr.cost_breakdown.total_tokens,
+                )
 
         if not dr.approved:
             return self._escalate(session_id, project, tracker,
