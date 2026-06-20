@@ -358,15 +358,19 @@ class Agent:
                              executor, session_id: Optional[str] = None,
                              controller=None, max_steps: int = 40,
                              max_tokens: int = 16000,
-                             effort: Optional[str] = None) -> ImplementResult:
+                             effort: Optional[str] = None,
+                             project_context: str = "") -> ImplementResult:
         """Run the bash tool-use loop until the implementer finishes or is
         cancelled. Uses IMPLEMENT_SYSTEM regardless of which model runs it.
         `effort` overrides the model's configured effort (the independent
-        effort filter); None keeps the model default. Gated per-model by the
-        client, so it's safe on any model."""
+        effort filter); None keeps the model default. `project_context` (the
+        project's CLAUDE.md) is prepended to the system so conventions are always
+        present; it sits in the cached prefix, so it's cheap on repeats."""
         from ..execution.executor import CommandStopped
 
         effort = effort or self.effort
+        system = (IMPLEMENT_SYSTEM + "\n\n" + project_context
+                  if project_context else IMPLEMENT_SYSTEM)
 
         messages: list[dict] = [{"role": "user", "content": (
             "Implement the following instructions in the repository. Follow the "
@@ -386,7 +390,7 @@ class Agent:
                                        last_commit_sha=last_sha)
 
             resp = self.client.complete(
-                model=self.model, system=IMPLEMENT_SYSTEM, messages=messages,
+                model=self.model, system=system, messages=messages,
                 max_tokens=max_tokens, effort=effort, thinking=True,
                 tools=[_BASH_TOOL], agent_label=self.label,
                 cache_messages=True)  # cache the growing tool-loop history

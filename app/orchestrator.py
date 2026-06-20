@@ -110,6 +110,18 @@ class Orchestrator:
         tracker.reset()
         repo_path, test_command = self._target(session)
 
+        # Load the project's conventions (CLAUDE.md) once, to inject into the
+        # implementation context so the coder always follows the stack's rules.
+        # Cached in the prompt prefix, so cheap on repeats. Toggle to disable.
+        project_context = ""
+        if self._config.get_raw(
+                "LOCAL_MANAGER_INJECT_PROJECT_CONTEXT", "true").lower() == "true":
+            from .project_context import load_project_conventions
+            project_context = load_project_conventions(repo_path)
+            if project_context:
+                logger.info("Injecting %d chars of project conventions into "
+                            "the implementation context.", len(project_context))
+
         # ---- pre-flight ----
         pf_repo = repo_path if task_type != "new_app" else None
         pf = self._preflight.session(
@@ -239,15 +251,15 @@ class Orchestrator:
                 "opus": lambda: opus.implement_with_tools(
                     instructions, repo_path=repo_path, executor=self._executor,
                     session_id=session_id, controller=self._controller,
-                    effort=impl_effort),
+                    effort=impl_effort, project_context=project_context),
                 "sonnet": lambda: sonnet.implement_with_tools(
                     instructions, repo_path=repo_path, executor=self._executor,
                     session_id=session_id, controller=self._controller,
-                    effort=impl_effort),
+                    effort=impl_effort, project_context=project_context),
                 "haiku": lambda: haiku.implement_with_tools(
                     instructions, repo_path=repo_path, executor=self._executor,
                     session_id=session_id, controller=self._controller,
-                    effort=impl_effort),
+                    effort=impl_effort, project_context=project_context),
             }
 
             # UI 4: Track implementation timing
