@@ -96,15 +96,47 @@ class ModelHealth:
 class AgentFallbackChain:
     """Manages fallback chains and model health tracking."""
 
-    # Define fallback chains per task type
-    FALLBACK_CHAINS = {
-        "plan_generation": ["sonnet", "haiku", "opus"],
-        "plan_validation": ["haiku", "sonnet", "opus"],
-        "implementation": ["opus", "sonnet", "haiku"],
-        "bug_analysis": ["sonnet", "opus", "haiku"],
-        "test_analysis": ["haiku", "sonnet", "opus"],
-        "test_review": ["haiku", "sonnet", "opus"],
+    # The agent that normally LEADS each task (used when no `preferred` is given).
+    # The rest of the chain is derived from the capability ladder, so fallback is
+    # always: escalate to a more capable model first, then fall back to cheaper.
+    DEFAULT_LEADERS = {
+        "plan_generation": "sonnet",
+        "plan_validation": "haiku",
+        "implementation": "opus",
+        "bug_analysis": "sonnet",
+        "test_analysis": "haiku",
+        "test_review": "haiku",
     }
+
+    def _capability_ranking(self) -> list[str]:
+        """Capability ranking (cheap -> capable) from the registry, with a
+        safe default if the registry isn't available."""
+        try:
+            from .agents.registry import get_registry
+            order = get_registry().get_capability_order()
+            if order:
+                return order
+        except Exception:
+            pass
+        return ["haiku", "sonnet", "opus"]
+
+    def _ladder(self, leader: str, available: list[str]) -> list[str]:
+        """Order `available` agents as: leader, then more-capable (ascending),
+        then less-capable (descending). Unknown agents go last. This yields the
+        intended ladder, e.g. haiku -> sonnet -> opus, and opus -> sonnet -> haiku."""
+        ranking = self._capability_ranking()
+        def rank(a: str) -> int:
+            return ranking.index(a) if a in ranking else len(ranking)
+        lead_rank = rank(leader)
+        more = sorted([a for a in available if a != leader and rank(a) > lead_rank],
+                      key=rank)
+        less = sorted([a for a in available if a != leader and rank(a) < lead_rank],
+                      key=rank, reverse=True)
+        chain = ([leader] if leader in available else []) + more + less
+        for a in available:  # include any leftovers (e.g. unknown agents)
+            if a not in chain:
+                chain.append(a)
+        return chain
 
     def __init__(self):
         self.health: dict[str, ModelHealth] = {
@@ -134,14 +166,15 @@ class AgentFallbackChain:
         Returns:
             (result, agent_used) tuple
         """
-        fallback_chain = self.FALLBACK_CHAINS.get(task_type, ["sonnet", "haiku", "opus"])
-        # Lead with the preferred agent (if any), then the rest of the chain.
-        if preferred and preferred in fallback_chain:
-            fallback_chain = [preferred] + [a for a in fallback_chain if a != preferred]
         # Only agents that actually have a callable for this task.
-        candidates = [a for a in fallback_chain if a in agent_calls]
-        if not candidates:
+        available = list(agent_calls.keys())
+        if not available:
             raise RuntimeError(f"No agent callables provided for task {task_type}")
+        # Leader = explicit preference, else the task's natural leader, else
+        # whatever is available. The rest follows the capability ladder.
+        leader = preferred or self.DEFAULT_LEADERS.get(task_type) or available[0]
+        fallback_chain = self._ladder(leader, available)
+        candidates = fallback_chain
 
         attempted = False
         last_exc: Optional[Exception] = None

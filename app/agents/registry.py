@@ -35,10 +35,23 @@ class AgentRegistry:
     def __init__(self):
         self._agents: dict[str, AgentConfig] = {}
         self._primary_agent_order = ["haiku", "sonnet", "opus"]
+        # Capability ranking, cheapest -> most capable. Drives the fallback
+        # ladder (escalate to a more capable model first, then fall back to
+        # cheaper). A future model just slots into this list.
+        self._capability_order = ["haiku", "sonnet", "opus"]
         # Configurable orchestration roles (swappable for future agents)
         self._validation_agent = "haiku"  # fast, cheap validation
         self._implementation_agent = "opus"  # powerful implementation
         self._planning_agent = "sonnet"  # balanced planning
+
+    def get_capability_order(self) -> list[str]:
+        """Capability ranking, cheapest -> most capable (drives fallback)."""
+        return list(self._capability_order)
+
+    def set_capability_order(self, order: list[str]) -> None:
+        """Reorder/extend the capability ranking (e.g. when a model launches)."""
+        if order:
+            self._capability_order = list(order)
 
     def register(self, config: AgentConfig) -> None:
         """Register an agent configuration."""
