@@ -168,10 +168,10 @@ class Orchestrator:
         # session must never be marked "done" without going through the loop.
         # `dr.implementation` seeds the first round of instructions.
         instructions = dr.implementation or ""
-        # Lead the implementation fallback with the configured implementation
-        # agent (Settings -> Agents); the chain handles fallback if it's down.
-        from .agents.registry import get_registry
-        impl_preferred = get_registry().get_implementation_agent()
+        # Pick the implementation agent by task complexity (model-based judgement
+        # by Haiku), leading the fallback chain. Safe: any failure falls back to
+        # the configured agent. See _select_impl_agent.
+        impl_preferred = self._select_impl_agent(haiku, ctx, dr.plan)
 
         # ---- cycle loop with crash recovery ----
         recovery = get_crash_recovery()
@@ -461,6 +461,37 @@ class Orchestrator:
         base = self._config.get_raw("PROJECT_WEBSITE_REPO_PATH")
         parent = Path(base).parent if base else self._config.root
         return parent / ("new-app-" + session["id"][:8])
+
+    def _select_impl_agent(self, haiku, context: str, plan: str) -> str:
+        """Choose the implementation agent for this session.
+
+        When LOCAL_MANAGER_AUTO_ROUTE_IMPL is enabled (default), Haiku judges the
+        task's complexity and names the cheapest model that can do it reliably
+        (haiku for trivial edits, sonnet for moderate, opus for complex). The
+        chosen agent leads the implementation fallback chain, so a wrong/over-
+        cautious pick still completes via fallback.
+
+        Always safe: if routing is disabled or the classification call fails, we
+        use the configured implementation agent (Settings -> Agents; default opus)
+        so a task is never under-powered by accident.
+        """
+        from .agents.registry import get_registry
+        configured = get_registry().get_implementation_agent()
+
+        auto = self._config.get_raw(
+            "LOCAL_MANAGER_AUTO_ROUTE_IMPL", "true").lower() == "true"
+        if not auto:
+            return configured
+
+        try:
+            agent, reason = haiku.classify_complexity(context, plan)
+            logger.info("Implementation routing: %s (%s)", agent, reason)
+            return agent
+        except Exception as e:
+            logger.warning(
+                "Complexity routing failed (%s); using configured agent '%s'.",
+                e, configured)
+            return configured
 
     # ------------------------------------------------------------------ #
     # Outcomes

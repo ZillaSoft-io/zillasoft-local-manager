@@ -28,6 +28,19 @@ class ValidationVerdict:
     corrections: str = ""
 
 
+# Structured output for implementation-complexity routing. Haiku judges how hard
+# the task is and names the cheapest model that can do it reliably.
+_COMPLEXITY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "agent": {"type": "string", "enum": ["haiku", "sonnet", "opus"]},
+        "reason": {"type": "string"},
+    },
+    "required": ["agent", "reason"],
+    "additionalProperties": False,
+}
+
+
 # Structured output for one clarification turn. Haiku either asks another
 # question (status="asking") or signals it has enough context (status="ready"),
 # in which case it fills the compiled summary, scope, and (for new apps) a
@@ -96,6 +109,47 @@ class HaikuAgent(Agent):
             approved=bool(data.get("approved", False)),
             corrections=str(data.get("corrections", "")).strip(),
         )
+
+    def classify_complexity(self, context: str, plan: str) -> tuple[str, str]:
+        """Pick the cheapest model that can implement this task reliably.
+
+        Tiers:
+          haiku  - trivial mechanical edits (typo, comment, config value, text/
+                   string change, simple rename); no real logic.
+          sonnet - moderate work (small feature, refactor, multi-file edit,
+                   straightforward bug fix).
+          opus   - complex work (non-trivial logic, new subsystem, tricky bug,
+                   anything needing careful multi-step reasoning).
+
+        Returns (agent_label, reason). Conservative by design: when uncertain it
+        is told to pick the MORE capable model, since under-powering a task costs
+        more (extra cycles) than the model itself. Falls back to "opus" if the
+        response is malformed.
+        """
+        prompt = (
+            "Route an implementation task to the cheapest model that can do it "
+            "RELIABLY. Tiers:\n"
+            "- haiku: trivial mechanical edits (fix a typo, edit a comment, "
+            "change a config value, rename, simple text/string change). No logic.\n"
+            "- sonnet: moderate work (small feature, refactor, multi-file edit, "
+            "straightforward bug fix).\n"
+            "- opus: complex work (non-trivial logic, new subsystem, tricky bug, "
+            "careful multi-step reasoning).\n\n"
+            "When uncertain, choose the MORE capable model.\n\n"
+            f"Task context:\n{context}\n\nPlan:\n{plan}\n\n"
+            "Pick the agent and give a one-line reason."
+        )
+        resp = self.ask(
+            prompt,
+            thinking=False,  # Haiku 4.5 has no adaptive thinking
+            output_config={"format": {"type": "json_schema",
+                                      "schema": _COMPLEXITY_SCHEMA}},
+        )
+        data = self._parse_json(resp.text)
+        agent = str(data.get("agent", "opus")).lower().strip()
+        if agent not in ("haiku", "sonnet", "opus"):
+            agent = "opus"
+        return agent, str(data.get("reason", "")).strip()
 
     # ------------------------------------------------------------------ #
     # Phase 3 — input clarification
