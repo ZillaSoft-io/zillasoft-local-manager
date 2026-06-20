@@ -65,13 +65,22 @@ class AnthropicClient:
     # Request building
     # ------------------------------------------------------------------ #
     @staticmethod
-    def _cached(block_text: str) -> list:
-        """A system value as a single cache-breakpoint text block."""
-        return [{"type": "text", "text": block_text,
-                 "cache_control": {"type": "ephemeral"}}]
+    def _cc(ttl: Optional[str] = None) -> dict:
+        """A cache_control marker. ttl='1h' opts into the 1-hour cache (survives
+        gaps like a slow build); default (None) is the 5-minute cache."""
+        cc: dict[str, Any] = {"type": "ephemeral"}
+        if ttl:
+            cc["ttl"] = ttl
+        return {"cache_control": cc}
 
     @staticmethod
-    def _with_cached_last_message(messages: list[dict]) -> list[dict]:
+    def _cached(block_text: str, ttl: Optional[str] = None) -> list:
+        """A system value as a single cache-breakpoint text block."""
+        return [{"type": "text", "text": block_text, **AnthropicClient._cc(ttl)}]
+
+    @staticmethod
+    def _with_cached_last_message(messages: list[dict],
+                                  ttl: Optional[str] = None) -> list[dict]:
         """Shallow-copy `messages` with a cache breakpoint on the last block of
         the last message — incremental caching for long tool-use loops, so each
         step re-reads the prior turns from cache instead of reprocessing them."""
@@ -80,7 +89,7 @@ class AnthropicClient:
         msgs = list(messages)
         last = dict(msgs[-1])
         content = last.get("content")
-        cc = {"cache_control": {"type": "ephemeral"}}
+        cc = AnthropicClient._cc(ttl)
         if isinstance(content, str):
             last["content"] = [{"type": "text", "text": content, **cc}]
         elif isinstance(content, list) and content and isinstance(content[-1], dict):
@@ -100,7 +109,8 @@ class AnthropicClient:
                       tools: Optional[list] = None,
                       tool_choice: Optional[dict] = None,
                       cache_system: bool = False,
-                      cache_messages: bool = False) -> dict:
+                      cache_messages: bool = False,
+                      cache_ttl: Optional[str] = None) -> dict:
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
@@ -110,7 +120,7 @@ class AnthropicClient:
             # Caching the system block also caches the (earlier) tools in the
             # prefix. Below the per-model minimum the API simply ignores the
             # marker, so this is always safe.
-            params["system"] = (AnthropicClient._cached(system)
+            params["system"] = (AnthropicClient._cached(system, cache_ttl)
                                 if cache_system else system)
 
         if thinking and supports_adaptive_thinking(model):
@@ -127,7 +137,8 @@ class AnthropicClient:
         if tool_choice:
             params["tool_choice"] = tool_choice
         if cache_messages:
-            params["messages"] = AnthropicClient._with_cached_last_message(messages)
+            params["messages"] = AnthropicClient._with_cached_last_message(
+                messages, cache_ttl)
         return params
 
     # ------------------------------------------------------------------ #
@@ -146,14 +157,19 @@ class AnthropicClient:
         LOCAL_MANAGER_PROMPT_CACHE is enabled: the system+tools prefix is always
         cached, and the message prefix is cached when `cache_messages` is set
         (used by the implementation tool-loop). Cache reads cost ~0.1x input.
+        LOCAL_MANAGER_CACHE_TTL=1h opts into the 1-hour cache so it survives long
+        gaps (e.g. a slow build between implement and review); default is 5 min.
         """
         cache_on = (self._config.get_raw(
             "LOCAL_MANAGER_PROMPT_CACHE", "true").lower() == "true")
+        cache_ttl = ("1h" if self._config.get_raw(
+            "LOCAL_MANAGER_CACHE_TTL", "5m").lower() == "1h" else None)
         params = self._build_params(
             model, system, messages, max_tokens, effort, thinking,
             output_config, tools, tool_choice,
             cache_system=cache_on,
-            cache_messages=(cache_on and cache_messages))
+            cache_messages=(cache_on and cache_messages),
+            cache_ttl=cache_ttl)
         sdk = self._client()
         try:
             if stream:
