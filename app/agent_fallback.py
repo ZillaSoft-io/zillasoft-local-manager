@@ -131,66 +131,73 @@ class AgentFallbackChain:
             (result, agent_used) tuple
         """
         fallback_chain = self.FALLBACK_CHAINS.get(task_type, ["sonnet", "haiku", "opus"])
+        # Only agents that actually have a callable for this task.
+        candidates = [a for a in fallback_chain if a in agent_calls]
+        if not candidates:
+            raise RuntimeError(f"No agent callables provided for task {task_type}")
 
-        for attempt_num, agent_name in enumerate(fallback_chain, 1):
-            if agent_name not in agent_calls:
-                logger.warning(f"Agent {agent_name} not available for task {task_type}")
-                continue
+        attempted = False
+        last_exc: Optional[Exception] = None
 
-            # Check health before attempting
+        def _try(agent_name: str) -> tuple[Any, str]:
+            """Run one agent; raises on failure (after recording health)."""
             health = self.health[agent_name]
-            if not health.should_try():
+            result = agent_calls[agent_name](*args, **kwargs)
+            health.record_success()
+            return result, agent_name
+
+        def _record_failure(agent_name: str, e: Exception) -> None:
+            health = self.health[agent_name]
+            health.record_failure()
+            if "429" in str(e) or "rate limit" in str(e).lower():
+                health.record_rate_limit()
+            is_transient = any(
+                kw in str(e).lower()
+                for kw in ["timeout", "429", "503", "connection", "overloaded"]
+            )
+            logger.log(
+                logging.WARNING if is_transient else logging.ERROR,
+                f"Task {task_type}: {agent_name} failed with {type(e).__name__} "
+                f"({'transient' if is_transient else 'fatal'}): {str(e)[:100]}"
+            )
+
+        # Primary pass: respect health (skip degraded / rate-limited agents).
+        for attempt_num, agent_name in enumerate(candidates, 1):
+            if not self.health[agent_name].should_try():
                 logger.warning(
-                    f"Skipping degraded model {agent_name} for {task_type} "
-                    f"({health.consecutive_failures} failures)"
+                    f"Skipping unhealthy model {agent_name} for {task_type} "
+                    f"({self.health[agent_name].consecutive_failures} failures)"
                 )
                 continue
-
+            attempted = True
             try:
-                logger.info(
-                    f"Task {task_type}: attempt {attempt_num}/{len(fallback_chain)} "
-                    f"with {agent_name}"
-                )
-                result = agent_calls[agent_name](*args, **kwargs)
-                health.record_success()
-                return result, agent_name
-
+                logger.info(f"Task {task_type}: attempt {attempt_num}/{len(candidates)} "
+                            f"with {agent_name}")
+                return _try(agent_name)
             except Exception as e:
-                error_type = type(e).__name__
-                health.record_failure()
+                last_exc = e
+                _record_failure(agent_name, e)
 
-                # Determine if error is transient or fatal
-                is_transient = any(
-                    keyword in str(e).lower()
-                    for keyword in ["timeout", "429", "503", "connection", "overloaded"]
-                )
+        # Last-resort pass: if health skipped EVERY agent, the heuristic may be
+        # stale or wrong (e.g. a bad health-check). Better to actually try than
+        # to fail cold without making a single API call.
+        if not attempted:
+            logger.warning(
+                f"All agents for {task_type} were health-skipped; "
+                f"attempting anyway as a last resort."
+            )
+            for agent_name in candidates:
+                try:
+                    return _try(agent_name)
+                except Exception as e:
+                    last_exc = e
+                    _record_failure(agent_name, e)
 
-                # Stability 2: Detect rate limits (429) and apply backoff
-                if "429" in str(e) or "rate limit" in str(e).lower():
-                    health.record_rate_limit()
-
-                log_level = logging.WARNING if is_transient else logging.ERROR
-                logger.log(
-                    log_level,
-                    f"Task {task_type}: {agent_name} failed with {error_type} "
-                    f"({'transient' if is_transient else 'fatal'}): {str(e)[:100]}"
-                )
-
-                if attempt_num < len(fallback_chain):
-                    logger.info(f"Trying fallback agent...")
-                    continue
-                else:
-                    # All agents exhausted
-                    logger.error(
-                        f"Task {task_type}: All agents exhausted. "
-                        f"Failed agents: {', '.join(fallback_chain)}"
-                    )
-                    raise RuntimeError(
-                        f"All agents failed for {task_type}. Last error: {error_type}: {str(e)}"
-                    ) from e
-
-        # Shouldn't reach here, but just in case
-        raise RuntimeError(f"No available agents for task {task_type}")
+        logger.error(f"Task {task_type}: all agents exhausted ({', '.join(candidates)}).")
+        raise RuntimeError(
+            f"All agents failed for {task_type}. "
+            f"Last error: {type(last_exc).__name__ if last_exc else 'none'}: {last_exc}"
+        ) from last_exc
 
     def get_health_summary(self) -> dict[str, Any]:
         """Get summary of model health for monitoring."""
