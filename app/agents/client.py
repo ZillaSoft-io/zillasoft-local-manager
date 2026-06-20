@@ -65,19 +65,53 @@ class AnthropicClient:
     # Request building
     # ------------------------------------------------------------------ #
     @staticmethod
+    def _cached(block_text: str) -> list:
+        """A system value as a single cache-breakpoint text block."""
+        return [{"type": "text", "text": block_text,
+                 "cache_control": {"type": "ephemeral"}}]
+
+    @staticmethod
+    def _with_cached_last_message(messages: list[dict]) -> list[dict]:
+        """Shallow-copy `messages` with a cache breakpoint on the last block of
+        the last message — incremental caching for long tool-use loops, so each
+        step re-reads the prior turns from cache instead of reprocessing them."""
+        if not messages:
+            return messages
+        msgs = list(messages)
+        last = dict(msgs[-1])
+        content = last.get("content")
+        cc = {"cache_control": {"type": "ephemeral"}}
+        if isinstance(content, str):
+            last["content"] = [{"type": "text", "text": content, **cc}]
+        elif isinstance(content, list) and content and isinstance(content[-1], dict):
+            new = list(content)
+            new[-1] = {**content[-1], **cc}
+            last["content"] = new
+        else:
+            return messages  # unknown shape — leave untouched
+        msgs[-1] = last
+        return msgs
+
+    @staticmethod
     def _build_params(model: str, system: Optional[str],
                       messages: list[dict], max_tokens: int,
                       effort: Optional[str], thinking: bool,
                       output_config: Optional[dict],
                       tools: Optional[list] = None,
-                      tool_choice: Optional[dict] = None) -> dict:
+                      tool_choice: Optional[dict] = None,
+                      cache_system: bool = False,
+                      cache_messages: bool = False) -> dict:
         params: dict[str, Any] = {
             "model": model,
             "max_tokens": max_tokens,
             "messages": messages,
         }
         if system:
-            params["system"] = system
+            # Caching the system block also caches the (earlier) tools in the
+            # prefix. Below the per-model minimum the API simply ignores the
+            # marker, so this is always safe.
+            params["system"] = (AnthropicClient._cached(system)
+                                if cache_system else system)
 
         if thinking and supports_adaptive_thinking(model):
             params["thinking"] = {"type": "adaptive"}
@@ -92,6 +126,8 @@ class AnthropicClient:
             params["tools"] = tools
         if tool_choice:
             params["tool_choice"] = tool_choice
+        if cache_messages:
+            params["messages"] = AnthropicClient._with_cached_last_message(messages)
         return params
 
     # ------------------------------------------------------------------ #
@@ -102,11 +138,22 @@ class AnthropicClient:
                  effort: Optional[str] = None, thinking: bool = True,
                  output_config: Optional[dict] = None, stream: bool = False,
                  tools: Optional[list] = None, tool_choice: Optional[dict] = None,
-                 agent_label: str = "agent") -> AgentResponse:
-        """Make one model call and return the normalized response."""
+                 agent_label: str = "agent",
+                 cache_messages: bool = False) -> AgentResponse:
+        """Make one model call and return the normalized response.
+
+        Prompt caching (Anthropic ephemeral) is applied when
+        LOCAL_MANAGER_PROMPT_CACHE is enabled: the system+tools prefix is always
+        cached, and the message prefix is cached when `cache_messages` is set
+        (used by the implementation tool-loop). Cache reads cost ~0.1x input.
+        """
+        cache_on = (self._config.get_raw(
+            "LOCAL_MANAGER_PROMPT_CACHE", "true").lower() == "true")
         params = self._build_params(
             model, system, messages, max_tokens, effort, thinking,
-            output_config, tools, tool_choice)
+            output_config, tools, tool_choice,
+            cache_system=cache_on,
+            cache_messages=(cache_on and cache_messages))
         sdk = self._client()
         try:
             if stream:

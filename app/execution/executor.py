@@ -12,6 +12,8 @@ orchestrator checks between steps, this is the last-line guard.
 from __future__ import annotations
 
 import logging
+import os
+import re
 import shutil
 import subprocess
 import time
@@ -22,6 +24,21 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 _BASH = shutil.which("bash")
+
+# Env var names the agent's shell must NOT see. Bash is intentionally unbounded
+# (it can do whatever it needs to fix a bug), but it never needs the app's
+# secrets — the push happens later, in our code, behind the approval gate. So we
+# strip them from the child environment to limit the blast radius of a
+# prompt-injected command (e.g. `echo $ANTHROPIC_API_KEY`).
+_SECRET_ENV = re.compile(
+    r"(API_KEY|_TOKEN|SECRET|PASSWORD|PASSWD|CONNECTION_STRING|PRIVATE_KEY"
+    r"|CREDENTIAL|AUTH|ANTHROPIC|AWS_|JIRA|SENTRY|RAILWAY|STRIPE|BREVO"
+    r"|LOCAL_MANAGER_AUTH_TOKEN)", re.IGNORECASE)
+
+
+def _safe_env() -> dict:
+    """A copy of the environment with the app's secrets removed."""
+    return {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k)}
 
 
 class CommandStopped(Exception):
@@ -67,6 +84,7 @@ class CodeExecutor:
             proc = subprocess.run(
                 argv, cwd=cwd, shell=(_BASH is None),
                 capture_output=True, text=True,
+                env=_safe_env(),  # secrets stripped — see _SECRET_ENV
                 timeout=timeout or self._default_timeout,
             )
             return ExecResult(

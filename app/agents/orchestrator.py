@@ -49,8 +49,14 @@ class AgentOrchestrator:
         """
         self.cycle_num += 1
 
+        # Cache key: hash of the FULL context. Keying on context[:100] (the old
+        # behaviour) collided on contexts sharing a prefix and missed on tiny
+        # edits past char 100.
+        import hashlib
+        cache_key = hashlib.sha256(context.encode("utf-8")).hexdigest()
+
         # Check cache first
-        cached_plan = get_cached_plan(self.cache, context[:100])
+        cached_plan = get_cached_plan(self.cache, cache_key)
         if cached_plan:
             struct_logger.info(
                 "Plan generation (cached)",
@@ -72,7 +78,7 @@ class AgentOrchestrator:
             self.usage_tracker.record("sonnet", self.sonnet.model, response.usage)
 
             # Cache for future use
-            cache_plan(self.cache, context[:100], response.text)
+            cache_plan(self.cache, cache_key, response.text)
 
             struct_logger.info(
                 "Plan generation (generated)",

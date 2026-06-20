@@ -388,7 +388,8 @@ class Agent:
             resp = self.client.complete(
                 model=self.model, system=IMPLEMENT_SYSTEM, messages=messages,
                 max_tokens=max_tokens, effort=effort, thinking=True,
-                tools=[_BASH_TOOL], agent_label=self.label)
+                tools=[_BASH_TOOL], agent_label=self.label,
+                cache_messages=True)  # cache the growing tool-loop history
             msg = resp.raw
 
             if getattr(msg, "stop_reason", None) != "tool_use":
