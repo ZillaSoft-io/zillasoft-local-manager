@@ -13,10 +13,17 @@ local_manager.db
 local_manager.db-journal
 local_manager.db-wal
 local_manager.db-shm
+.cache.db
 audit_logs/
 uploads/
 paused/
 *.log
+.checkpoints/
+.recordings/
+.ml_stats.json
+
+# Local operator scripts — may contain secrets/tokens; never commit
+.local_manager_scripts/
 
 # OS / editor
 .DS_Store
